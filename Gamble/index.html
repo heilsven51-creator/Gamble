@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gamble Royale</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Abril+Fatface&family=Manrope:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <nav class="topbar">
+        <div>
+          <p class="eyebrow">Virtual Casino Experience</p>
+          <h1>Gamble Royale</h1>
+        </div>
+        <div class="bank-panel">
+          <span>Angemeldet als</span>
+          <strong id="currentUserLabel">Nicht eingeloggt</strong>
+          <span class="coin-unit">Balance: <span id="balance">0</span> Coins</span>
+        </div>
+      </nav>
+
+      <div class="hero-grid">
+        <section class="hero-copy">
+          <p class="hero-kicker">Blackjack. Coin Flip. Pferderennen. Slots.</p>
+          <h2>Casino-Demo mit Accounts, Profilen, Freunden und Leaderboard.</h2>
+          <p class="hero-text">
+            Erstelle einen Spieler-Account, sammle Coins, füge Freunde per Spieler-ID hinzu und steig in die Top 20 auf.
+          </p>
+          <div class="hero-actions">
+            <a href="#games" class="button primary">Ins Game-Menü</a>
+          </div>
+        </section>
+
+        <aside class="live-panel">
+          <p class="panel-label">Live Feed</p>
+          <ul id="activityLog" class="activity-log">
+            <li>Willkommen im Gamble Royale.</li>
+            <li>Erstelle einen Account oder logge dich ein.</li>
+            <li>Spiele, verdiene Coins und klettere ins Ranking.</li>
+          </ul>
+        </aside>
+      </div>
+    </header>
+
+    <main id="games" class="games-menu-layout">
+      <aside class="games-menu">
+        <div class="menu-switcher">
+          <button class="menu-switch-button active" data-menu-view="account">Acc</button>
+          <button class="menu-switch-button" data-menu-view="modes">Modie</button>
+          <button class="menu-switch-button" data-menu-view="daily">Daily</button>
+          <button class="menu-switch-button" data-menu-view="rankings">Ranglisten</button>
+        </div>
+
+        <section class="menu-section menu-block active-menu-view" data-menu-panel="account">
+          <div class="menu-header">
+            <p class="panel-label">Acc Menü</p>
+            <span class="menu-caption">Login, Profil, Freunde, Admin</span>
+          </div>
+          <div class="auth-card">
+            <div class="auth-tabs">
+              <button class="menu-button active auth-tab" data-auth-view="login">Login</button>
+              <button class="menu-button auth-tab" data-auth-view="register">Registrieren</button>
+            </div>
+
+            <div id="loginView" class="auth-view active-auth-view">
+              <label for="loginEmail">E-Mail</label>
+              <input id="loginEmail" type="email" placeholder="E-Mail">
+              <label for="loginPassword">Passwort</label>
+              <input id="loginPassword" type="password" placeholder="Passwort">
+              <button class="button secondary" id="loginUser">Einloggen</button>
+            </div>
+
+            <div id="registerView" class="auth-view hidden">
+              <label for="registerUsername">Benutzername</label>
+              <input id="registerUsername" type="text" placeholder="Benutzername">
+              <label for="registerEmail">E-Mail</label>
+              <input id="registerEmail" type="email" placeholder="E-Mail">
+              <label for="registerPassword">Passwort</label>
+              <input id="registerPassword" type="password" placeholder="Passwort">
+              <button class="button secondary" id="registerUser">Account erstellen</button>
+            </div>
+
+            <p id="authMessage" class="helper-text">Noch kein Account? Registriere dich im zweiten Tab.</p>
+            <button class="button secondary hidden" id="logoutUser">Logout</button>
+          </div>
+
+          <div class="profile-card">
+            <p class="panel-label compact">Profil</p>
+            <p><strong>Username:</strong> <span id="profileUsername">-</span></p>
+            <p><strong>E-Mail:</strong> <span id="profileEmail">-</span></p>
+            <p><strong>Spieler ID:</strong> <span id="profilePlayerId">-</span></p>
+            <p><strong>Coins:</strong> <span id="profileCoins">0</span></p>
+
+            <label for="changeUsernameInput">Benutzername ändern</label>
+            <input id="changeUsernameInput" type="text" placeholder="Neuen Benutzernamen eingeben">
+            <button class="button secondary" id="changeUsernameButton">Benutzernamen speichern</button>
+
+            <label for="friendPlayerId">Freund per Spieler-ID adden</label>
+            <input id="friendPlayerId" type="text" placeholder="z. B. PLY123456">
+            <button class="button secondary" id="addFriendButton">Freund hinzufügen</button>
+
+            <div>
+              <p class="panel-label compact">Freunde</p>
+              <ul id="friendsList" class="simple-list">
+                <li>Keine Freunde hinzugefuegt.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="admin-head">
+            <p class="panel-label compact">Admin Panel</p>
+            <span id="adminStatus" class="status-chip">Gesperrt</span>
+          </div>
+
+          <div class="admin-login">
+            <label for="adminCode">Admin Code</label>
+            <input id="adminCode" type="password" placeholder="Code eingeben">
+            <button class="button secondary" id="unlockAdmin">Admin Login</button>
+          </div>
+
+          <div id="adminControls" class="admin-controls hidden">
+            <label for="adminSelfCoins">Coins für dich</label>
+            <input id="adminSelfCoins" type="number" min="0" step="10" value="500">
+            <div class="actions">
+              <button class="button secondary" id="adminGiveSelf">Mir Coins geben</button>
+              <button class="button secondary" id="adminTakeSelf">Mir Coins abziehen</button>
+            </div>
+
+            <label for="adminTargetPlayerId">Andere Spieler-ID</label>
+            <input id="adminTargetPlayerId" type="text" placeholder="Spieler-ID">
+            <label for="adminTargetCoins">Coins für anderen Spieler</label>
+            <input id="adminTargetCoins" type="number" min="0" step="10" value="500">
+            <div class="actions">
+              <button class="button secondary" id="adminGiveOther">Anderem Spieler Coins geben</button>
+              <button class="button secondary" id="adminTakeOther">Anderem Spieler Coins abziehen</button>
+            </div>
+
+            <div class="admin-account-list">
+              <p class="panel-label compact">Erstellte Accounts</p>
+              <ul id="adminAccountsList" class="simple-list">
+                <li>Noch keine Accounts vorhanden.</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="menu-section menu-block" data-menu-panel="modes">
+          <div class="menu-header">
+            <p class="panel-label">Modie Menü</p>
+            <span class="menu-caption">Wähle dein Spiel</span>
+          </div>
+          <div class="menu-list">
+            <button class="menu-button active" data-game-target="blackjack">Blackjack</button>
+            <button class="menu-button" data-game-target="coinflip">Coin Flip</button>
+            <button class="menu-button" data-game-target="race">Pferderennen</button>
+            <button class="menu-button" data-game-target="slots">Slots</button>
+            <button class="menu-button" data-game-target="cards-preview">Alle Karten</button>
+          </div>
+        </section>
+
+        <section class="menu-section menu-block" data-menu-panel="daily">
+          <div class="menu-header">
+            <p class="panel-label">Daily Menü</p>
+            <span class="menu-caption">Tägliche Belohnung und Work-Aufgaben</span>
+          </div>
+
+          <div class="daily-card">
+            <p><strong>Daily Reward:</strong> Einmal täglich 1.000 Coins.</p>
+            <p id="dailyStatusText" class="helper-text">Logge dich ein, um deine tägliche Belohnung abzuholen.</p>
+            <button class="button secondary" id="claimDailyReward">Daily Reward claimen</button>
+          </div>
+
+          <div class="work-card">
+            <p><strong>Work:</strong> Bis zu 10 Matheaufgaben pro Tag für Klasse 5-7.</p>
+            <p id="workCounter" class="helper-text">Heute gelöst: 0 / 10</p>
+            <p id="workQuestion" class="work-question">Logge dich ein und starte eine Aufgabe.</p>
+            <input id="workAnswer" type="text" placeholder="Antwort eingeben">
+            <div class="actions">
+              <button class="button secondary" id="generateWorkTask">Neue Aufgabe</button>
+              <button class="button secondary" id="submitWorkTask">Antwort prüfen</button>
+            </div>
+            <p id="workStatusText" class="helper-text">Je nach Schwierigkeit bekommst du zwischen 50 und 1.000 Coins.</p>
+          </div>
+        </section>
+
+        <section class="menu-section menu-block" data-menu-panel="rankings">
+          <div class="menu-header">
+            <p class="panel-label">Ranglisten Menü</p>
+            <span class="menu-caption">Lokales Leaderboard dieses Browsers</span>
+          </div>
+          <ol id="leaderboardList" class="leaderboard-list">
+            <li>Noch keine Spieler registriert.</li>
+          </ol>
+          <div class="local-players">
+            <p class="panel-label compact">Lokale Spieler + IDs</p>
+            <ul id="localPlayersList" class="simple-list">
+              <li>Noch keine lokalen Spieler vorhanden.</li>
+            </ul>
+          </div>
+        </section>
+      </aside>
+
+      <div class="games-stage">
+        <section class="game-card blackjack-card active-game" data-game-panel="blackjack">
+          <div class="card-head">
+            <div>
+              <p class="game-tag">Table Game</p>
+              <h3>Blackjack</h3>
+            </div>
+            <span class="status-chip" id="blackjackStatus">Bereit</span>
+          </div>
+
+          <div class="bet-row">
+            <label for="blackjackBet">Einsatz</label>
+            <input id="blackjackBet" type="number" min="10" step="10" value="50">
+          </div>
+
+          <div class="blackjack-board">
+            <div>
+              <p class="hand-label">Dealer</p>
+              <div id="dealerCards" class="cards"></div>
+              <p id="dealerScore" class="score-pill">Punkte: 0</p>
+            </div>
+            <div>
+              <p class="hand-label">Du</p>
+              <div id="playerCards" class="cards"></div>
+              <p id="playerScore" class="score-pill">Punkte: 0</p>
+              <p id="blackjackInfo" class="blackjack-info">Natürliches Blackjack zahlt 3:2. Split und Double Down aktiv.</p>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="button primary" id="dealBlackjack">Deal</button>
+            <button class="button secondary" id="hitBlackjack">Hit</button>
+            <button class="button secondary" id="standBlackjack">Stand</button>
+            <button class="button secondary" id="doubleBlackjack">Double</button>
+            <button class="button secondary" id="splitBlackjack">Split</button>
+          </div>
+        </section>
+
+        <section class="game-card" data-game-panel="coinflip">
+          <div class="card-head">
+            <div>
+              <p class="game-tag">Fast Bet</p>
+              <h3>Coin Flip</h3>
+            </div>
+            <span class="status-chip" id="coinStatus">Bereit</span>
+          </div>
+
+          <div class="bet-row">
+            <label for="coinBet">Einsatz</label>
+            <input id="coinBet" type="number" min="10" step="10" value="50">
+          </div>
+
+          <div class="coin-choice">
+            <button class="choice-button active" data-choice="Kopf">Kopf</button>
+            <button class="choice-button" data-choice="Zahl">Zahl</button>
+          </div>
+
+          <div class="coin-stage">
+            <div id="coinVisual" class="coin-visual"></div>
+            <p id="coinResult">Wähle Kopf oder Zahl und starte den Flip.</p>
+          </div>
+
+          <div class="actions">
+            <button class="button primary" id="flipCoin">Flip starten</button>
+          </div>
+        </section>
+
+        <section class="game-card race-card" data-game-panel="race">
+          <div class="card-head">
+            <div>
+              <p class="game-tag">Simulation</p>
+              <h3>Pferderennen</h3>
+            </div>
+            <span class="status-chip" id="raceStatus">Bereit</span>
+          </div>
+
+          <div class="bet-row bet-grid">
+            <div>
+              <label for="raceBet">Einsatz</label>
+              <input id="raceBet" type="number" min="10" step="10" value="50">
+            </div>
+            <div>
+              <label for="raceHorse">Pferd</label>
+              <select id="raceHorse">
+                <option value="Blaze">Blaze</option>
+                <option value="Storm">Storm</option>
+                <option value="Nova">Nova</option>
+                <option value="Comet">Comet</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="raceTrack" class="race-track">
+            <div class="lane"><span>Blaze</span><div class="runner" data-horse="Blaze">Horse</div></div>
+            <div class="lane"><span>Storm</span><div class="runner" data-horse="Storm">Horse</div></div>
+            <div class="lane"><span>Nova</span><div class="runner" data-horse="Nova">Horse</div></div>
+            <div class="lane"><span>Comet</span><div class="runner" data-horse="Comet">Horse</div></div>
+          </div>
+
+          <div class="actions">
+            <button class="button primary" id="startRace">Rennen starten</button>
+          </div>
+        </section>
+
+        <section class="game-card slots-card" data-game-panel="slots">
+          <div class="card-head">
+            <div>
+              <p class="game-tag">Machine</p>
+              <h3>Slots</h3>
+            </div>
+            <span class="status-chip" id="slotsStatus">Bereit</span>
+          </div>
+
+          <div class="bet-row">
+            <label for="slotsBet">Einsatz</label>
+            <input id="slotsBet" type="number" min="10" step="10" value="50">
+          </div>
+
+          <div class="slots-machine">
+            <div class="reel-window"><div class="reel" id="reel1"></div></div>
+            <div class="reel-window"><div class="reel" id="reel2"></div></div>
+            <div class="reel-window"><div class="reel" id="reel3"></div></div>
+          </div>
+
+          <p id="slotsResult">Drei gleiche Symbole zahlen stark aus.</p>
+
+          <div class="actions">
+            <button class="button primary" id="spinSlots">Spin</button>
+          </div>
+        </section>
+
+        <section class="game-card" data-game-panel="cards-preview">
+          <div class="card-head">
+            <div>
+              <p class="game-tag">Preview</p>
+              <h3>Alle Karten</h3>
+            </div>
+            <span class="status-chip">52 Karten</span>
+          </div>
+
+          <div id="allCardsPreview" class="all-cards-preview"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase-config.js"></script>
+  <script src="script.js"></script>
+  <script src="supabase-live.js"></script>
+</body>
+</html>
