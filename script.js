@@ -166,6 +166,7 @@ function updateBalance() {
   state.balance = currentUser ? currentUser.coins : 0;
   balanceEl.textContent = String(state.balance);
   currentUserLabel.textContent = currentUser ? currentUser.username : "Nicht eingeloggt";
+  syncBetInputs();
 }
 
 function logActivity(message) {
@@ -188,6 +189,28 @@ function wait(ms) {
 
 function showAuthMessage(message) {
   authMessage.textContent = message;
+}
+
+function syncBetInputs() {
+  const maxBet = Math.max(0, Math.floor(Number(state.balance) || 0));
+  const betInputs = [blackjackBetInput, coinBetInput, raceBetInput, slotsBetInput];
+
+  betInputs.forEach((input) => {
+    if (!input) return;
+    input.min = maxBet > 0 ? "1" : "0";
+    input.step = "1";
+    input.max = String(maxBet);
+
+    const currentValue = Number(input.value);
+    if (!Number.isFinite(currentValue) || currentValue < 1) {
+      input.value = maxBet > 0 ? String(Math.min(50, maxBet)) : "0";
+      return;
+    }
+
+    if (currentValue > maxBet && maxBet > 0) {
+      input.value = String(maxBet);
+    }
+  });
 }
 
 function formatCoinDelta(amount) {
@@ -558,7 +581,7 @@ function getBetValue(selector) {
 }
 
 function canAfford(bet) {
-  return bet >= 10 && bet <= state.balance;
+  return bet >= 1 && bet <= state.balance;
 }
 
 function formatSlotSymbol(symbol) {

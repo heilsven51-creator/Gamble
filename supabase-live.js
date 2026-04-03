@@ -150,6 +150,9 @@ function liveRenderProfile() {
   currentUserLabel.textContent = liveState.profile?.username || "Nicht eingeloggt";
   balanceEl.textContent = String(liveState.profile?.coins || 0);
   state.balance = liveState.profile?.coins || 0;
+  if (typeof syncBetInputs === "function") {
+    syncBetInputs();
+  }
 
   friendsList.innerHTML = "";
   if (liveState.friends.length === 0) {
