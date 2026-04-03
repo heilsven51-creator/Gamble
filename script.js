@@ -1317,7 +1317,7 @@ function generateSlotOutcome() {
   const uniqueCount = new Set(result).size;
 
   // Hebt die Gewinnchance nur leicht an, indem manche Nieten zu einem Paar werden.
-  if (uniqueCount === 3 && Math.random() < 0.12) {
+  if (uniqueCount === 3 && Math.random() < 0.08) {
     const sourceIndex = Math.random() < 0.5 ? 0 : 1;
     result[2] = result[sourceIndex];
   }
