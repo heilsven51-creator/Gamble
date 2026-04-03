@@ -298,10 +298,10 @@
           </div>
 
           <div id="raceTrack" class="race-track">
-            <div class="lane"><span>Blaze</span><div class="runner" data-horse="Blaze">Horse</div></div>
-            <div class="lane"><span>Storm</span><div class="runner" data-horse="Storm">Horse</div></div>
-            <div class="lane"><span>Nova</span><div class="runner" data-horse="Nova">Horse</div></div>
-            <div class="lane"><span>Comet</span><div class="runner" data-horse="Comet">Horse</div></div>
+            <div class="lane"><span>Blaze</span><div class="runner" data-horse="Blaze" aria-label="Blaze">🐎</div></div>
+            <div class="lane"><span>Storm</span><div class="runner" data-horse="Storm" aria-label="Storm">🐎</div></div>
+            <div class="lane"><span>Nova</span><div class="runner" data-horse="Nova" aria-label="Nova">🐎</div></div>
+            <div class="lane"><span>Comet</span><div class="runner" data-horse="Comet" aria-label="Comet">🐎</div></div>
           </div>
 
           <div class="actions">
@@ -349,6 +349,16 @@
         </section>
       </div>
     </main>
+  </div>
+
+  <div id="gameResultOverlay" class="result-overlay hidden" aria-live="polite">
+    <div class="result-screen">
+      <p id="resultGameLabel" class="panel-label">Spielrunde</p>
+      <h3 id="resultTitle">Runde beendet</h3>
+      <p id="resultAmount" class="result-amount">0 Coins</p>
+      <p id="resultDetail" class="result-detail">Die Auswertung erscheint hier.</p>
+      <button class="button primary" id="closeGameResult">Weiter</button>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>

@@ -18,12 +18,26 @@ function replaceNode(selector) {
   return newNode;
 }
 
-function mapProfile(profile, authUser) {
+function normalizeProfile(profile) {
   return {
     ...profile,
-    playerId: profile.player_id,
-    email: authUser?.email || profile.email || "-",
+    coins: Number(profile?.coins ?? 0),
+    work_completed: Number(profile?.work_completed ?? 0),
   };
+}
+
+function mapProfile(profile, authUser) {
+  const normalizedProfile = normalizeProfile(profile);
+  return {
+    ...normalizedProfile,
+    id: normalizedProfile.id || authUser?.id || null,
+    playerId: normalizedProfile.player_id,
+    email: authUser?.email || normalizedProfile.email || "-",
+  };
+}
+
+function resolveProfileId(profile = liveState.profile) {
+  return profile?.id || liveState.user?.id || null;
 }
 
 function buildFallbackUsername(authUser, preferredUsername = "") {
@@ -96,7 +110,7 @@ async function liveFetchProfiles() {
     liveState.profiles = [];
     return;
   }
-  liveState.profiles = data || [];
+  liveState.profiles = (data || []).map((profile) => normalizeProfile(profile));
 }
 
 async function liveFetchProfile() {
@@ -227,8 +241,27 @@ async function liveSync() {
 
 async function liveAdjustBalance(amount, user = liveState.profile) {
   if (!user) return false;
-  const nextCoins = Math.max(0, (user.coins || 0) + amount);
-  const { error } = await liveClient.from("profiles").update({ coins: nextCoins }).eq("id", user.id);
+  const profileId = resolveProfileId(user);
+  if (!profileId) {
+    authMessage.textContent = "Profil-ID fehlt. Bitte neu einloggen.";
+    return false;
+  }
+
+  const { data: currentProfile, error: readError } = await liveClient
+    .from("profiles")
+    .select("coins")
+    .eq("id", profileId)
+    .single();
+
+  if (readError) {
+    authMessage.textContent = readError.message || "Coins konnten nicht gelesen werden.";
+    return false;
+  }
+
+  const currentCoins = Number(currentProfile?.coins ?? 0);
+  const nextCoins = Math.max(0, currentCoins + amount);
+
+  const { error } = await liveClient.from("profiles").update({ coins: nextCoins }).eq("id", profileId);
   if (error) {
     authMessage.textContent = error.message || "Coins konnten nicht aktualisiert werden.";
     return false;
@@ -384,7 +417,7 @@ function installLiveHandlers() {
     }
 
     const duplicate = liveState.profiles.find((profile) =>
-      profile.id !== liveState.profile.id && profile.username.toLowerCase() === nextUsername.toLowerCase()
+      profile.id !== resolveProfileId() && profile.username.toLowerCase() === nextUsername.toLowerCase()
     );
 
     if (duplicate) {
@@ -395,7 +428,7 @@ function installLiveHandlers() {
     const { error } = await liveClient
       .from("profiles")
       .update({ username: nextUsername })
-      .eq("id", liveState.profile.id);
+      .eq("id", resolveProfileId());
 
     if (error) {
       authMessage.textContent = error.message || "Benutzername konnte nicht geändert werden.";
@@ -420,7 +453,7 @@ function installLiveHandlers() {
       authMessage.textContent = "Spieler-ID nicht gefunden.";
       return;
     }
-    if (target.id === liveState.profile.id) {
+    if (target.id === resolveProfileId()) {
       authMessage.textContent = "Du kannst dich nicht selbst adden.";
       return;
     }
@@ -431,7 +464,7 @@ function installLiveHandlers() {
       return;
     }
 
-    const { error } = await liveClient.from("friends").insert({ user_id: liveState.profile.id, friend_id: target.id });
+    const { error } = await liveClient.from("friends").insert({ user_id: resolveProfileId(), friend_id: target.id });
     if (error) {
       authMessage.textContent = error.message || "Freund konnte nicht hinzugefügt werden.";
       return;
@@ -456,7 +489,7 @@ function installLiveHandlers() {
     const { error } = await liveClient
       .from("profiles")
       .update({ daily_last_claim: todayKey(), coins: liveState.profile.coins + 1000 })
-      .eq("id", liveState.profile.id);
+      .eq("id", resolveProfileId());
     if (error) {
       dailyStatusText.textContent = error.message;
       return;
@@ -510,7 +543,7 @@ function installLiveHandlers() {
     const { error } = await liveClient
       .from("profiles")
       .update({ work_date: todayKey(), work_completed: nextCompleted, coins: nextCoins })
-      .eq("id", liveState.profile.id);
+      .eq("id", resolveProfileId());
     if (error) {
       workStatusText.textContent = error.message;
       return;

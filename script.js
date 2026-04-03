@@ -13,6 +13,7 @@ const state = {
     hands: [],
     active: false,
     busy: false,
+    phase: "idle",
     activeHandIndex: 0,
     dealerRevealed: false,
     splitUsed: false,
@@ -71,15 +72,50 @@ const blackjackBetInput = document.querySelector("#blackjackBet");
 const coinBetInput = document.querySelector("#coinBet");
 const raceBetInput = document.querySelector("#raceBet");
 const slotsBetInput = document.querySelector("#slotsBet");
+const resultOverlay = document.querySelector("#gameResultOverlay");
+const resultGameLabel = document.querySelector("#resultGameLabel");
+const resultTitle = document.querySelector("#resultTitle");
+const resultAmount = document.querySelector("#resultAmount");
+const resultDetail = document.querySelector("#resultDetail");
+const closeGameResultButton = document.querySelector("#closeGameResult");
 
-const symbols = ["7", "STAR", "SPADE", "DIAMOND", "CLUB", "CROWN"];
+const symbols = ["seven", "cherry", "lemon", "grapes", "bell", "diamond"];
+const slotSymbolMap = {
+  seven: { display: "7", className: "slot-seven" },
+  cherry: { display: "🍒", className: "slot-cherry" },
+  lemon: { display: "🍋", className: "slot-lemon" },
+  grapes: { display: "🍇", className: "slot-grapes" },
+  bell: { display: "🔔", className: "slot-bell" },
+  diamond: { display: "💎", className: "slot-diamond" },
+};
 const horseNames = ["Blaze", "Storm", "Nova", "Comet"];
 const WORK_LIMIT_PER_DAY = 10;
+const RESULT_SCREEN_DURATION = 3200;
+const COIN_FLIP_DURATION = 1400;
+const BLACKJACK_DEAL_DELAY = 420;
+const DEALER_DRAW_DELAY = 750;
+const RACE_STEP_DELAY = 320;
+const SLOT_REEL_START_DELAY = 1080;
+const SLOT_REEL_STEP_DELAY = 520;
+const SLOT_REEL_STOP_DURATION = 980;
+const DEALER_HITS_SOFT_17 = false;
+
+let resultOverlayTimer = null;
 
 coinVisual.innerHTML = `
   <div class="coin-face front" aria-label="Kopf"><span>K</span></div>
   <div class="coin-face back" aria-label="Zahl"><span>Z</span></div>
 `;
+
+closeGameResultButton?.addEventListener("click", () => {
+  hideGameResult();
+});
+
+resultOverlay?.addEventListener("click", (event) => {
+  if (event.target === resultOverlay) {
+    hideGameResult();
+  }
+});
 
 function loadAppData() {
   const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -152,6 +188,63 @@ function wait(ms) {
 
 function showAuthMessage(message) {
   authMessage.textContent = message;
+}
+
+function formatCoinDelta(amount) {
+  const rounded = Math.round((Number(amount) || 0) * 100) / 100;
+  const absolute = Number.isInteger(Math.abs(rounded))
+    ? Math.abs(rounded).toFixed(0)
+    : Math.abs(rounded).toFixed(2);
+
+  if (rounded > 0) return `+${absolute} Coins`;
+  if (rounded < 0) return `-${absolute} Coins`;
+  return "0 Coins";
+}
+
+function hideGameResult() {
+  if (!resultOverlay) return;
+  if (resultOverlayTimer) {
+    window.clearTimeout(resultOverlayTimer);
+    resultOverlayTimer = null;
+  }
+
+  resultOverlay.classList.remove("visible");
+  window.setTimeout(() => {
+    resultOverlay.classList.add("hidden");
+  }, 220);
+}
+
+function showGameResult({ game, title, amount = 0, detail = "", variant = "push", duration = RESULT_SCREEN_DURATION }) {
+  if (!resultOverlay) return;
+
+  if (resultOverlayTimer) {
+    window.clearTimeout(resultOverlayTimer);
+    resultOverlayTimer = null;
+  }
+
+  resultOverlay.dataset.variant = variant;
+  resultGameLabel.textContent = game;
+  resultTitle.textContent = title;
+  resultAmount.textContent = formatCoinDelta(amount);
+  resultDetail.textContent = detail;
+  resultOverlay.classList.remove("hidden");
+
+  window.requestAnimationFrame(() => {
+    resultOverlay.classList.add("visible");
+  });
+
+  if (duration > 0) {
+    resultOverlayTimer = window.setTimeout(() => {
+      hideGameResult();
+    }, duration);
+  }
+}
+
+function buildBalanceLine(extra = "") {
+  const currentCoins = Number(getCurrentUser()?.coins ?? state.balance ?? 0);
+  return extra
+    ? `${extra} Neue Balance: ${currentCoins} Coins.`
+    : `Neue Balance: ${currentCoins} Coins.`;
 }
 
 function showGamePanel(target) {
@@ -304,7 +397,9 @@ function setAdminMode(isUnlocked) {
 }
 
 function syncCurrentUser() {
-  state.currentProfile = state.appData.users.find((user) => user.id === state.appData.currentUserId) || null;
+  if (state.appData.currentUserId) {
+    state.currentProfile = state.appData.users.find((user) => user.id === state.appData.currentUserId) || null;
+  }
   updateBalance();
   renderProfile();
   renderLeaderboard();
@@ -445,9 +540,14 @@ function requireUser(statusSelector) {
   return null;
 }
 
-function adjustBalance(amount, user = getCurrentUser()) {
+async function adjustBalance(amount, user = getCurrentUser()) {
   if (!user) return false;
-  user.coins = Math.max(0, user.coins + amount);
+
+  if (!state.appData.currentUserId && typeof window.liveAdjustBalance === "function") {
+    return window.liveAdjustBalance(amount, user);
+  }
+
+  user.coins = Math.max(0, Number(user.coins || 0) + amount);
   syncCurrentUser();
   return true;
 }
@@ -462,24 +562,46 @@ function canAfford(bet) {
 }
 
 function formatSlotSymbol(symbol) {
-  return symbol;
+  return slotSymbolMap[symbol]?.display || String(symbol);
 }
 
-function buildReelSequence(finalSymbol, loops = 12) {
+function getSlotSymbolClass(symbol) {
+  return slotSymbolMap[symbol]?.className || "";
+}
+
+function getRandomSlotSymbol() {
+  return symbols[Math.floor(Math.random() * symbols.length)];
+}
+
+function buildReelSequence(finalSymbol, loops = 20) {
   const sequence = [];
   for (let i = 0; i < loops; i += 1) {
-    sequence.push(symbols[i % symbols.length]);
+    sequence.push(getRandomSlotSymbol());
   }
   sequence.push(finalSymbol);
   return sequence;
+}
+
+function generateSlotOutcome() {
+  const result = [getRandomSlotSymbol(), getRandomSlotSymbol(), getRandomSlotSymbol()];
+  const uniqueCount = new Set(result).size;
+
+  // Hebt die Gewinnchance nur leicht an, indem manche Nieten zu einem Paar werden.
+  if (uniqueCount === 3 && Math.random() < 0.12) {
+    const sourceIndex = Math.random() < 0.5 ? 0 : 1;
+    result[2] = result[sourceIndex];
+  }
+
+  return result;
 }
 
 function renderReel(reel, sequence) {
   reel.innerHTML = "";
   sequence.forEach((symbol) => {
     const item = document.createElement("div");
-    item.className = "reel-symbol";
-    item.textContent = formatSlotSymbol(symbol);
+    const symbolClass = getSlotSymbolClass(symbol);
+    item.className = `reel-symbol ${symbolClass}`.trim();
+    item.innerHTML = `<span class="slot-symbol-badge ${symbolClass}">${formatSlotSymbol(symbol)}</span>`;
     reel.appendChild(item);
   });
 }
@@ -502,18 +624,25 @@ function setBetLocked(input, locked) {
   input.disabled = locked;
 }
 
-function createDeck() {
+function createDeck(numberOfDecks = 6) {
   const suits = ["♠", "♥", "♦", "♣"];
   const ranks = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
   const deck = [];
 
-  for (const suit of suits) {
-    for (const rank of ranks) {
-      deck.push({ suit, rank });
+  for (let shoeIndex = 0; shoeIndex < numberOfDecks; shoeIndex += 1) {
+    for (const suit of suits) {
+      for (const rank of ranks) {
+        deck.push({ suit, rank });
+      }
     }
   }
 
-  return deck.sort(() => Math.random() - 0.5);
+  for (let i = deck.length - 1; i > 0; i -= 1) {
+    const randomIndex = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[randomIndex]] = [deck[randomIndex], deck[i]];
+  }
+
+  return deck;
 }
 
 function drawCard() {
@@ -541,7 +670,7 @@ function getCardValue(rank) {
   return Number(rank);
 }
 
-function calculateHand(cards) {
+function calculateHandDetails(cards) {
   let total = cards.reduce((sum, card) => sum + getCardValue(card.rank), 0);
   let aces = cards.filter((card) => card.rank === "A").length;
 
@@ -550,7 +679,19 @@ function calculateHand(cards) {
     aces -= 1;
   }
 
-  return total;
+  return {
+    total,
+    isSoft: aces > 0 && total <= 21,
+  };
+}
+
+function calculateHand(cards) {
+  return calculateHandDetails(cards).total;
+}
+
+function shouldDealerDraw(cards) {
+  const details = calculateHandDetails(cards);
+  return details.total < 17 || (DEALER_HITS_SOFT_17 && details.total === 17 && details.isSoft);
 }
 
 function isBlackjack(cards) {
@@ -637,6 +778,65 @@ function renderDealer() {
   document.querySelector("#dealerScore").textContent = `Punkte: ${visibleCards.length ? calculateHand(visibleCards) : 0}`;
 }
 
+function renderBlackjackHandsView() {
+  const container = document.querySelector("#playerCards");
+  const scoreEl = document.querySelector("#playerScore");
+  const infoEl = document.querySelector("#blackjackInfo");
+
+  container.innerHTML = "";
+  container.classList.toggle("split-layout", state.blackjack.hands.length > 1);
+
+  if (state.blackjack.hands.length === 0) {
+    scoreEl.textContent = "Punkte: 0";
+    infoEl.textContent = "Blackjack zahlt 3:2. Dealer steht auf Soft 17. Double nur mit den ersten zwei Karten.";
+    return;
+  }
+
+  if (state.blackjack.hands.length === 1) {
+    const hand = state.blackjack.hands[0];
+    hand.cards.forEach((card) => container.appendChild(createCardElement(card)));
+    scoreEl.textContent = `Punkte: ${calculateHand(hand.cards)}`;
+  } else {
+    state.blackjack.hands.forEach((hand, index) => {
+      const handWrap = document.createElement("div");
+      handWrap.className = `player-hand ${state.blackjack.active && index === state.blackjack.activeHandIndex ? "active-hand" : ""}`;
+
+      const label = document.createElement("p");
+      label.className = "mini-label";
+      label.textContent = `Hand ${index + 1} - ${calculateHand(hand.cards)} Punkte`;
+      handWrap.appendChild(label);
+
+      const cardsWrap = document.createElement("div");
+      cardsWrap.className = "cards";
+      hand.cards.forEach((card) => cardsWrap.appendChild(createCardElement(card)));
+      handWrap.appendChild(cardsWrap);
+      container.appendChild(handWrap);
+    });
+
+    scoreEl.textContent = `Aktive Hand: ${state.blackjack.activeHandIndex + 1} von ${state.blackjack.hands.length}`;
+  }
+
+  if (!state.blackjack.active) {
+    infoEl.textContent = "Blackjack zahlt 3:2. Dealer steht auf Soft 17. Double nur mit den ersten zwei Karten.";
+    return;
+  }
+
+  const activeHand = getActiveHand();
+  const splitText = canSplitHand(activeHand) && !state.blackjack.splitUsed ? ", Split" : "";
+
+  if (state.blackjack.phase === "dealing") {
+    infoEl.textContent = "Die Startkarten werden gerade wie am Tisch ausgegeben.";
+    return;
+  }
+
+  if (state.blackjack.phase === "dealer") {
+    infoEl.textContent = "Dealer deckt auf und spielt seine Hand aus.";
+    return;
+  }
+
+  infoEl.textContent = `Hand ${state.blackjack.activeHandIndex + 1}: Hit, Stand, Double${splitText}.`;
+}
+
 function renderPlayerHands() {
   const container = document.querySelector("#playerCards");
   const scoreEl = document.querySelector("#playerScore");
@@ -689,7 +889,7 @@ function renderPlayerHands() {
 
 function renderBlackjack() {
   renderDealer();
-  renderPlayerHands();
+  renderBlackjackHandsView();
 }
 
 function resetBlackjackBoard() {
@@ -697,6 +897,7 @@ function resetBlackjackBoard() {
   state.blackjack.hands = [];
   state.blackjack.active = false;
   state.blackjack.busy = false;
+  state.blackjack.phase = "idle";
   state.blackjack.activeHandIndex = 0;
   state.blackjack.dealerRevealed = false;
   state.blackjack.splitUsed = false;
@@ -706,16 +907,39 @@ function resetBlackjackBoard() {
 
 async function settleDealer() {
   state.blackjack.busy = true;
+  state.blackjack.phase = "dealer";
   state.blackjack.dealerRevealed = true;
   setStatus("#blackjackStatus", "Dealer zieht");
   renderBlackjack();
-  await wait(550);
+  await wait(DEALER_DRAW_DELAY);
 
-  while (calculateHand(state.blackjack.dealer) < 17) {
+  while (shouldDealerDraw(state.blackjack.dealer)) {
     state.blackjack.dealer.push(drawCard());
     renderBlackjack();
-    await wait(600);
+    await wait(DEALER_DRAW_DELAY);
   }
+}
+
+async function dealOpeningBlackjackCards() {
+  setStatus("#blackjackStatus", "Karten werden gegeben");
+  renderBlackjack();
+  await wait(280);
+
+  state.blackjack.hands[0].cards.push(drawCard());
+  renderBlackjack();
+  await wait(BLACKJACK_DEAL_DELAY);
+
+  state.blackjack.dealer.push(drawCard());
+  renderBlackjack();
+  await wait(BLACKJACK_DEAL_DELAY);
+
+  state.blackjack.hands[0].cards.push(drawCard());
+  renderBlackjack();
+  await wait(BLACKJACK_DEAL_DELAY);
+
+  state.blackjack.dealer.push(drawCard());
+  renderBlackjack();
+  await wait(BLACKJACK_DEAL_DELAY);
 }
 
 async function settleBlackjackRound() {
@@ -727,61 +951,76 @@ async function settleBlackjackRound() {
   let totalNet = 0;
   const currentUser = getCurrentUser();
 
-  state.blackjack.hands.forEach((hand, index) => {
+  for (const [index, hand] of state.blackjack.hands.entries()) {
     const score = calculateHand(hand.cards);
     const label = `Hand ${index + 1}`;
 
     if (score > 21) {
-      results.push(`${label} bust`);
+      results.push(`${label} bustet`);
       totalNet -= hand.bet;
-      return;
+      continue;
     }
 
     if (hand.naturalBlackjack && !dealerHasBlackjack) {
-      adjustBalance(hand.bet * 2.5, currentUser);
-      results.push(`${label} Blackjack`);
+      await adjustBalance(hand.bet * 2.5, currentUser);
+      results.push(`${label} hat Blackjack`);
       totalNet += hand.bet * 1.5;
-      return;
+      continue;
     }
 
     if (dealerHasBlackjack && !hand.naturalBlackjack) {
       results.push(`${label} verliert gegen Dealer-Blackjack`);
       totalNet -= hand.bet;
-      return;
+      continue;
     }
 
     if (dealerScore > 21 || score > dealerScore) {
-      adjustBalance(hand.bet * 2, currentUser);
+      await adjustBalance(hand.bet * 2, currentUser);
       results.push(`${label} gewinnt`);
       totalNet += hand.bet;
-      return;
+      continue;
     }
 
     if (score === dealerScore) {
-      adjustBalance(hand.bet, currentUser);
-      results.push(`${label} Push`);
-      return;
+      await adjustBalance(hand.bet, currentUser);
+      results.push(`${label} ist Push`);
+      continue;
     }
 
     results.push(`${label} verliert`);
     totalNet -= hand.bet;
-  });
+  }
 
   state.blackjack.active = false;
   state.blackjack.busy = false;
+  state.blackjack.phase = "finished";
   renderBlackjack();
-  setStatus("#blackjackStatus", totalNet >= 0 ? "Ausgezahlt" : "Verloren");
+  const variant = totalNet > 0 ? "win" : totalNet < 0 ? "loss" : "push";
+  const title = totalNet > 0 ? "Blackjack gewonnen" : totalNet < 0 ? "Blackjack verloren" : "Blackjack Push";
+  setStatus("#blackjackStatus", totalNet > 0 ? "Gewonnen" : totalNet < 0 ? "Verloren" : "Push");
+  showGameResult({
+    game: "Blackjack",
+    title,
+    amount: totalNet,
+    detail: `${results.join(" • ")}. ${buildBalanceLine()}`,
+    variant,
+    duration: RESULT_SCREEN_DURATION + 400,
+  });
   logActivity(`Blackjack beendet: ${results.join(", ")}.`);
-  await wait(1400);
+  await wait(RESULT_SCREEN_DURATION + 400);
   resetBlackjackBoard();
   setStatus("#blackjackStatus", "Bereit");
 }
 
 async function moveToNextHandOrDealer() {
+  state.blackjack.busy = true;
+  await wait(320);
   const nextIndex = state.blackjack.hands.findIndex((hand, index) => index > state.blackjack.activeHandIndex && !hand.finished);
 
   if (nextIndex !== -1) {
     state.blackjack.activeHandIndex = nextIndex;
+    state.blackjack.busy = false;
+    state.blackjack.phase = "player";
     setStatus("#blackjackStatus", `Hand ${nextIndex + 1}`);
     renderBlackjack();
     return;
@@ -790,16 +1029,20 @@ async function moveToNextHandOrDealer() {
   await settleBlackjackRound();
 }
 
-function startBlackjackRound(bet) {
+async function startBlackjackRound(bet) {
   const currentUser = requireUser("#blackjackStatus");
   if (!currentUser) return;
 
-  adjustBalance(-bet, currentUser);
+  const deducted = await adjustBalance(-bet, currentUser);
+  if (!deducted) {
+    setStatus("#blackjackStatus", "Fehler");
+    return;
+  }
   state.blackjack.deck = createDeck();
-  state.blackjack.dealer = [drawCard(), drawCard()];
+  state.blackjack.dealer = [];
   state.blackjack.hands = [
     {
-      cards: [drawCard(), drawCard()],
+      cards: [],
       bet,
       finished: false,
       naturalBlackjack: false,
@@ -807,24 +1050,30 @@ function startBlackjackRound(bet) {
     },
   ];
   state.blackjack.active = true;
+  state.blackjack.busy = true;
+  state.blackjack.phase = "dealing";
   state.blackjack.activeHandIndex = 0;
   state.blackjack.dealerRevealed = false;
   state.blackjack.splitUsed = false;
-  state.blackjack.hands[0].naturalBlackjack = isBlackjack(state.blackjack.hands[0].cards);
   setBetLocked(blackjackBetInput, true);
+  hideGameResult();
 
+  await dealOpeningBlackjackCards();
+  state.blackjack.hands[0].naturalBlackjack = isBlackjack(state.blackjack.hands[0].cards);
+  state.blackjack.busy = false;
+  state.blackjack.phase = "player";
   renderBlackjack();
-  setStatus("#blackjackStatus", "Deine Hand");
+  setStatus("#blackjackStatus", "Hand 1");
   logActivity(`Blackjack gestartet mit ${bet} Coins Einsatz.`);
 
   if (state.blackjack.hands[0].naturalBlackjack || isBlackjack(state.blackjack.dealer)) {
     state.blackjack.hands[0].finished = true;
     state.blackjack.busy = true;
-    settleBlackjackRound();
+    await settleBlackjackRound();
   }
 }
 
-document.querySelector("#dealBlackjack").addEventListener("click", () => {
+document.querySelector("#dealBlackjack").addEventListener("click", async () => {
   const currentUser = requireUser("#blackjackStatus");
   const bet = getBetValue("#blackjackBet");
   if (!currentUser) return;
@@ -833,35 +1082,38 @@ document.querySelector("#dealBlackjack").addEventListener("click", () => {
     return;
   }
 
-  startBlackjackRound(bet);
+  await startBlackjackRound(bet);
 });
 
-document.querySelector("#hitBlackjack").addEventListener("click", () => {
+document.querySelector("#hitBlackjack").addEventListener("click", async () => {
   if (!requireUser("#blackjackStatus")) return;
   if (!state.blackjack.active || state.blackjack.busy) return;
 
   const hand = getActiveHand();
+  state.blackjack.busy = true;
   hand.cards.push(drawCard());
   renderBlackjack();
+  await wait(320);
 
   if (calculateHand(hand.cards) >= 21) {
     hand.finished = true;
-    moveToNextHandOrDealer();
+    await moveToNextHandOrDealer();
     return;
   }
 
+  state.blackjack.busy = false;
   setStatus("#blackjackStatus", `Hand ${state.blackjack.activeHandIndex + 1}`);
 });
 
-document.querySelector("#standBlackjack").addEventListener("click", () => {
+document.querySelector("#standBlackjack").addEventListener("click", async () => {
   if (!requireUser("#blackjackStatus")) return;
   if (!state.blackjack.active || state.blackjack.busy) return;
 
   getActiveHand().finished = true;
-  moveToNextHandOrDealer();
+  await moveToNextHandOrDealer();
 });
 
-document.querySelector("#doubleBlackjack").addEventListener("click", () => {
+document.querySelector("#doubleBlackjack").addEventListener("click", async () => {
   const currentUser = requireUser("#blackjackStatus");
   if (!currentUser) return;
   if (!state.blackjack.active || state.blackjack.busy) return;
@@ -872,16 +1124,22 @@ document.querySelector("#doubleBlackjack").addEventListener("click", () => {
     return;
   }
 
-  adjustBalance(-hand.bet, currentUser);
+  const deducted = await adjustBalance(-hand.bet, currentUser);
+  if (!deducted) {
+    setStatus("#blackjackStatus", "Fehler");
+    return;
+  }
   hand.bet *= 2;
   hand.doubled = true;
+  state.blackjack.busy = true;
   hand.cards.push(drawCard());
   hand.finished = true;
   renderBlackjack();
-  moveToNextHandOrDealer();
+  await wait(320);
+  await moveToNextHandOrDealer();
 });
 
-document.querySelector("#splitBlackjack").addEventListener("click", () => {
+document.querySelector("#splitBlackjack").addEventListener("click", async () => {
   const currentUser = requireUser("#blackjackStatus");
   if (!currentUser) return;
   if (!state.blackjack.active || state.blackjack.busy) return;
@@ -892,7 +1150,11 @@ document.querySelector("#splitBlackjack").addEventListener("click", () => {
     return;
   }
 
-  adjustBalance(-hand.bet, currentUser);
+  const deducted = await adjustBalance(-hand.bet, currentUser);
+  if (!deducted) {
+    setStatus("#blackjackStatus", "Fehler");
+    return;
+  }
   const movedCard = hand.cards.pop();
   hand.cards.push(drawCard());
   hand.naturalBlackjack = false;
@@ -907,7 +1169,10 @@ document.querySelector("#splitBlackjack").addEventListener("click", () => {
 
   state.blackjack.hands.splice(state.blackjack.activeHandIndex + 1, 0, newHand);
   state.blackjack.splitUsed = true;
+  state.blackjack.busy = true;
   renderBlackjack();
+  await wait(320);
+  state.blackjack.busy = false;
   setStatus("#blackjackStatus", "Split aktiv");
 });
 
@@ -919,7 +1184,7 @@ document.querySelectorAll(".choice-button").forEach((button) => {
   });
 });
 
-document.querySelector("#flipCoin").addEventListener("click", () => {
+document.querySelector("#flipCoin").addEventListener("click", async () => {
   const currentUser = requireUser("#coinStatus");
   const bet = getBetValue("#coinBet");
   if (!currentUser) return;
@@ -930,7 +1195,14 @@ document.querySelector("#flipCoin").addEventListener("click", () => {
 
   state.coinBusy = true;
   setBetLocked(coinBetInput, true);
-  adjustBalance(-bet, currentUser);
+  hideGameResult();
+  const deducted = await adjustBalance(-bet, currentUser);
+  if (!deducted) {
+    state.coinBusy = false;
+    setBetLocked(coinBetInput, false);
+    setStatus("#coinStatus", "Fehler");
+    return;
+  }
   setStatus("#coinStatus", "Flip...");
   coinVisual.classList.remove("flipping", "show-tails");
   void coinVisual.offsetWidth;
@@ -939,30 +1211,40 @@ document.querySelector("#flipCoin").addEventListener("click", () => {
 
   const outcome = Math.random() < 0.5 ? "Kopf" : "Zahl";
   const outcomeShort = outcome === "Kopf" ? "K" : "Z";
+  await wait(COIN_FLIP_DURATION / 2);
+  coinVisual.classList.toggle("show-tails", outcome === "Zahl");
+  await wait(COIN_FLIP_DURATION / 2);
+  coinVisual.classList.remove("flipping");
 
-  window.setTimeout(() => {
-    coinVisual.classList.toggle("show-tails", outcome === "Zahl");
-  }, 325);
-
-  window.setTimeout(() => {
-    coinVisual.classList.remove("flipping");
-
-    if (outcome === state.currentChoice) {
-      adjustBalance(bet * 2, currentUser);
-      setStatus("#coinStatus", "Gewonnen");
-      document.querySelector("#coinResult").textContent = `${outcomeShort}! Du gewinnst ${bet} Coins Profit.`;
-      logActivity(`Coin Flip gewonnen auf ${outcomeShort}.`);
-      state.coinBusy = false;
-      setBetLocked(coinBetInput, false);
-      return;
-    }
-
-    setStatus("#coinStatus", "Verloren");
-    document.querySelector("#coinResult").textContent = `${outcomeShort}! Diesmal verloren.`;
-    logActivity(`Coin Flip verloren. Ergebnis war ${outcomeShort}.`);
+  if (outcome === state.currentChoice) {
+    await adjustBalance(bet * 2, currentUser);
+    setStatus("#coinStatus", "Gewonnen");
+    document.querySelector("#coinResult").textContent = `${outcomeShort}! Du gewinnst ${bet} Coins Profit.`;
+    showGameResult({
+      game: "Coin Flip",
+      title: "Coin Flip gewonnen",
+      amount: bet,
+      detail: `${outcomeShort} ist gefallen. Auszahlung: ${bet * 2} Coins. ${buildBalanceLine()}`,
+      variant: "win",
+    });
+    logActivity(`Coin Flip gewonnen auf ${outcomeShort}.`);
     state.coinBusy = false;
     setBetLocked(coinBetInput, false);
-  }, 650);
+    return;
+  }
+
+  setStatus("#coinStatus", "Verloren");
+  document.querySelector("#coinResult").textContent = `${outcomeShort}! Diesmal verloren.`;
+  showGameResult({
+    game: "Coin Flip",
+    title: "Coin Flip verloren",
+    amount: -bet,
+    detail: `${outcomeShort} ist gefallen. Dein Einsatz ist verloren. ${buildBalanceLine()}`,
+    variant: "loss",
+  });
+  logActivity(`Coin Flip verloren. Ergebnis war ${outcomeShort}.`);
+  state.coinBusy = false;
+  setBetLocked(coinBetInput, false);
 });
 
 document.querySelector("#startRace").addEventListener("click", async () => {
@@ -978,7 +1260,14 @@ document.querySelector("#startRace").addEventListener("click", async () => {
 
   state.raceBusy = true;
   setBetLocked(raceBetInput, true);
-  adjustBalance(-bet, currentUser);
+  hideGameResult();
+  const deducted = await adjustBalance(-bet, currentUser);
+  if (!deducted) {
+    state.raceBusy = false;
+    setBetLocked(raceBetInput, false);
+    setStatus("#raceStatus", "Fehler");
+    return;
+  }
   setStatus("#raceStatus", "Rennen läuft");
   logActivity(`Pferderennen gestartet. Tipp auf ${selectedHorse}.`);
 
@@ -988,31 +1277,63 @@ document.querySelector("#startRace").addEventListener("click", async () => {
     Nova: 0,
     Comet: 0,
   };
+  const finishPositions = {};
 
   const runners = [...document.querySelectorAll(".runner")];
   runners.forEach((runner) => {
+    const lane = runner.closest(".lane");
+    const laneWidth = lane?.clientWidth || 520;
+    const runnerWidth = runner.offsetWidth || 56;
+    const lineLeft = laneWidth - 22 - 18;
+    const stopAt = Math.max(0, lineLeft - 90 - runnerWidth + 12);
+    finishPositions[runner.dataset.horse] = stopAt;
+    lane?.classList.remove("winner-lane");
+    lane?.querySelector(".lane-winner-badge")?.remove();
+    runner.classList.remove("winner-runner");
     runner.style.transform = "translateX(0px)";
   });
 
   let winner = null;
 
   while (!winner) {
-    await wait(220);
+    await wait(RACE_STEP_DELAY);
 
     horseNames.forEach((horse) => {
-      positions[horse] += Math.floor(Math.random() * 35) + 10;
+      const finishAt = finishPositions[horse] ?? 390;
+      positions[horse] = Math.min(finishAt, positions[horse] + Math.floor(Math.random() * 22) + 12);
       const runner = document.querySelector(`[data-horse="${horse}"]`);
       runner.style.transform = `translateX(${positions[horse]}px)`;
 
-      if (positions[horse] >= 360 && !winner) {
+      if (positions[horse] >= finishAt && !winner) {
         winner = horse;
       }
     });
   }
 
+  await wait(440);
+
+  const winnerRunner = document.querySelector(`[data-horse="${winner}"]`);
+  const winnerLane = winnerRunner?.closest(".lane");
+  winnerRunner?.classList.add("winner-runner");
+  winnerLane?.classList.add("winner-lane");
+
+  if (winnerLane) {
+    const badge = document.createElement("div");
+    badge.className = "lane-winner-badge";
+    badge.textContent = "Gewinner";
+    winnerLane.appendChild(badge);
+  }
+
   if (winner === selectedHorse) {
-    adjustBalance(bet * 3, currentUser);
+    await adjustBalance(bet * 3, currentUser);
     setStatus("#raceStatus", `${winner} gewinnt`);
+    showGameResult({
+      game: "Pferderennen",
+      title: "Rennen gewonnen",
+      amount: bet * 2,
+      detail: `${winner} hat dein Rennen gewonnen. Auszahlung: ${bet * 3} Coins. ${buildBalanceLine()}`,
+      variant: "win",
+    });
     logActivity(`Pferderennen gewonnen mit ${winner}.`);
     state.raceBusy = false;
     setBetLocked(raceBetInput, false);
@@ -1020,12 +1341,19 @@ document.querySelector("#startRace").addEventListener("click", async () => {
   }
 
   setStatus("#raceStatus", `${winner} gewinnt`);
+  showGameResult({
+    game: "Pferderennen",
+    title: "Rennen verloren",
+    amount: -bet,
+    detail: `${winner} hat gewonnen, dein Tipp war ${selectedHorse}. ${buildBalanceLine()}`,
+    variant: "loss",
+  });
   logActivity(`Pferderennen verloren. Sieger: ${winner}.`);
   state.raceBusy = false;
   setBetLocked(raceBetInput, false);
 });
 
-document.querySelector("#spinSlots").addEventListener("click", () => {
+document.querySelector("#spinSlots").addEventListener("click", async () => {
   const currentUser = requireUser("#slotsStatus");
   const bet = getBetValue("#slotsBet");
   if (!currentUser) return;
@@ -1036,62 +1364,95 @@ document.querySelector("#spinSlots").addEventListener("click", () => {
 
   state.slotsBusy = true;
   setBetLocked(slotsBetInput, true);
-  adjustBalance(-bet, currentUser);
+  hideGameResult();
+  const deducted = await adjustBalance(-bet, currentUser);
+  if (!deducted) {
+    state.slotsBusy = false;
+    setBetLocked(slotsBetInput, false);
+    setStatus("#slotsStatus", "Fehler");
+    return;
+  }
   setStatus("#slotsStatus", "Spinning");
-  const finalSymbols = slotReels.map(() => symbols[Math.floor(Math.random() * symbols.length)]);
-  const sequences = finalSymbols.map((symbol, index) => buildReelSequence(symbol, 12 + index * 3));
+  const finalSymbols = generateSlotOutcome();
+  const sequences = finalSymbols.map((symbol, index) => buildReelSequence(symbol, 20 + index * 6));
+  const reelDurations = sequences.map((_, index) => 2200 + index * 850);
 
   slotReels.forEach((reel, index) => {
     renderReel(reel, sequences[index]);
-    reel.classList.add("spinning");
+    reel.classList.remove("settling");
+    reel.classList.add("rolling");
     reel.style.transition = "none";
     reel.style.transform = "translateY(0)";
   });
   slotsResult.textContent = "Die Walzen laufen...";
 
-  (async () => {
-    for (let i = 0; i < slotReels.length; i += 1) {
-      await wait(i === 0 ? 800 : 380);
-      const reel = slotReels[i];
-      const offset = (sequences[i].length - 1) * 120;
-      reel.classList.remove("spinning");
-      reel.style.transition = "transform 720ms cubic-bezier(0.12, 0.8, 0.24, 1)";
-      reel.style.transform = `translateY(-${offset}px)`;
-      await wait(760);
-    }
+  await wait(30);
 
-    slotReels.forEach((reel, index) => {
-      reel.classList.remove("spinning");
-      reel.style.transition = "none";
-      renderReel(reel, [finalSymbols[index]]);
-      reel.style.transform = "translateY(0)";
+  slotReels.forEach((reel, index) => {
+    const offset = (sequences[index].length - 1) * 120;
+    reel.style.transition = `transform ${reelDurations[index]}ms cubic-bezier(0.06, 0.8, 0.14, 1)`;
+    reel.style.transform = `translateY(-${offset + 26}px)`;
+  });
+
+  let previousDuration = 0;
+  for (let i = 0; i < slotReels.length; i += 1) {
+    const reel = slotReels[i];
+    const offset = (sequences[i].length - 1) * 120;
+    const waitForThisStop = reelDurations[i] - previousDuration;
+    await wait(waitForThisStop);
+    previousDuration = reelDurations[i];
+    reel.classList.remove("rolling");
+    reel.classList.add("settling");
+    reel.style.transition = "transform 220ms ease-out, filter 220ms ease-out";
+    reel.style.transform = `translateY(-${offset}px)`;
+    await wait(250);
+  }
+
+  slotReels.forEach((reel, index) => {
+    reel.classList.remove("rolling", "settling");
+    reel.style.transition = "none";
+    renderReel(reel, [finalSymbols[index]]);
+    reel.style.transform = "translateY(0)";
+  });
+
+  const uniqueCount = new Set(finalSymbols).size;
+  let payout = 0;
+
+  if (uniqueCount === 1) {
+    payout = bet * 5;
+  } else if (uniqueCount === 2) {
+    payout = bet * 2;
+  }
+
+  if (payout > 0) {
+    await adjustBalance(payout, currentUser);
+    setStatus("#slotsStatus", "Treffer");
+    slotsResult.textContent = `Treffer! Auszahlung: ${payout} Coins.`;
+    showGameResult({
+      game: "Slots",
+      title: "Slots gewonnen",
+      amount: payout - bet,
+      detail: `Die Walzen zahlen ${payout} Coins aus. ${buildBalanceLine()}`,
+      variant: "win",
     });
-
-    const uniqueCount = new Set(finalSymbols).size;
-    let payout = 0;
-
-    if (uniqueCount === 1) {
-      payout = bet * 5;
-    } else if (uniqueCount === 2) {
-      payout = bet * 2;
-    }
-
-    if (payout > 0) {
-      adjustBalance(payout, currentUser);
-      setStatus("#slotsStatus", "Treffer");
-      slotsResult.textContent = `Treffer! Auszahlung: ${payout} Coins.`;
-      logActivity(`Slots zahlen ${payout} Coins aus.`);
-      state.slotsBusy = false;
-      setBetLocked(slotsBetInput, false);
-      return;
-    }
-
-    setStatus("#slotsStatus", "Niete");
-    slotsResult.textContent = "Keine Kombination. Noch ein Spin?";
-    logActivity("Slots leider ohne Gewinn.");
+    logActivity(`Slots zahlen ${payout} Coins aus.`);
     state.slotsBusy = false;
     setBetLocked(slotsBetInput, false);
-  })();
+    return;
+  }
+
+  setStatus("#slotsStatus", "Niete");
+  slotsResult.textContent = "Keine Kombination. Noch ein Spin?";
+  showGameResult({
+    game: "Slots",
+    title: "Slots verloren",
+    amount: -bet,
+    detail: `Keine Gewinnlinie dieses Mal. ${buildBalanceLine()}`,
+    variant: "loss",
+  });
+  logActivity("Slots leider ohne Gewinn.");
+  state.slotsBusy = false;
+  setBetLocked(slotsBetInput, false);
 });
 
 document.querySelector("#loginUser").addEventListener("click", () => {
@@ -1382,7 +1743,7 @@ menuSwitchButtons.forEach((button) => {
   });
 });
 
-slotReels.forEach((reel) => renderReel(reel, ["7"]));
+slotReels.forEach((reel) => renderReel(reel, ["seven"]));
 renderAllCardsPreview();
 showMenuPanel("account");
 setAuthView("login");
