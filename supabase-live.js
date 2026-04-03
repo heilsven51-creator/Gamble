@@ -342,7 +342,7 @@ async function liveAdjustOtherPlayerBalance(playerId, amount) {
   return true;
 }
 
-async function liveRequireUser(statusSelector) {
+function liveRequireUser(statusSelector) {
   if (liveState.profile) return liveState.profile;
   if (statusSelector) setStatus(statusSelector, "Login nötig");
   authMessage.textContent = "Bitte erst einloggen.";
