@@ -53,6 +53,8 @@ const profileCoins = document.querySelector("#profileCoins");
 const changeUsernameInput = document.querySelector("#changeUsernameInput");
 const changeUsernameButton = document.querySelector("#changeUsernameButton");
 const friendsList = document.querySelector("#friendsList");
+const friendRequestsList = document.querySelector("#friendRequestsList");
+const friendOutgoingList = document.querySelector("#friendOutgoingList");
 const leaderboardList = document.querySelector("#leaderboardList");
 const localPlayersList = document.querySelector("#localPlayersList");
 const friendPlayerIdInput = document.querySelector("#friendPlayerId");
@@ -86,6 +88,14 @@ const aceChoiceText = document.querySelector("#aceChoiceText");
 const aceChoiceTotals = document.querySelector("#aceChoiceTotals");
 const aceAsOneButton = document.querySelector("#aceAsOne");
 const aceAsElevenButton = document.querySelector("#aceAsEleven");
+const friendActionOverlay = document.querySelector("#friendActionOverlay");
+const friendActionTitle = document.querySelector("#friendActionTitle");
+const friendActionInfo = document.querySelector("#friendActionInfo");
+const friendTransferAmountInput = document.querySelector("#friendTransferAmount");
+const friendActionStatus = document.querySelector("#friendActionStatus");
+const closeFriendActionButton = document.querySelector("#closeFriendAction");
+const removeFriendActionButton = document.querySelector("#removeFriendAction");
+const sendFriendCoinsButton = document.querySelector("#sendFriendCoins");
 
 const symbols = ["seven", "cherry", "lemon", "grapes", "bell", "diamond"];
 const slotSymbolMap = {
@@ -116,6 +126,8 @@ let gameAudioContext = null;
 let gameAudioOutput = null;
 let blackjackCardSequence = 0;
 let blackjackAceOverlayTimer = null;
+let friendActionSubmitHandler = null;
+let friendActionRemoveHandler = null;
 
 coinVisual.innerHTML = `
   <div class="coin-face front" aria-label="Kopf"><span>K</span></div>
@@ -129,6 +141,98 @@ closeGameResultButton?.addEventListener("click", () => {
 resultOverlay?.addEventListener("click", (event) => {
   if (event.target === resultOverlay) {
     hideGameResult();
+  }
+});
+
+function setFriendActionStatus(message = "", tone = "") {
+  if (!friendActionStatus) return;
+  friendActionStatus.textContent = message;
+  friendActionStatus.classList.remove("success", "error");
+  if (tone) {
+    friendActionStatus.classList.add(tone);
+  }
+}
+
+function closeFriendActionMenu() {
+  friendActionSubmitHandler = null;
+  friendActionRemoveHandler = null;
+  setFriendActionStatus("");
+  removeFriendActionButton?.classList.add("hidden");
+  friendActionOverlay?.classList.remove("visible");
+  window.setTimeout(() => {
+    friendActionOverlay?.classList.add("hidden");
+  }, 180);
+}
+
+function openFriendActionMenu({ title, info, defaultAmount = 100, onSubmit, onRemove = null }) {
+  if (!friendActionOverlay) return;
+  friendActionTitle.textContent = title;
+  friendActionInfo.textContent = info;
+  friendTransferAmountInput.value = String(Math.max(1, Math.floor(Number(defaultAmount) || 100)));
+  friendActionSubmitHandler = onSubmit;
+  friendActionRemoveHandler = onRemove;
+  removeFriendActionButton?.classList.toggle("hidden", typeof onRemove !== "function");
+  setFriendActionStatus("");
+  friendActionOverlay.classList.remove("hidden");
+  window.requestAnimationFrame(() => {
+    friendActionOverlay.classList.add("visible");
+  });
+}
+
+closeFriendActionButton?.addEventListener("click", () => {
+  closeFriendActionMenu();
+});
+
+friendActionOverlay?.addEventListener("click", (event) => {
+  if (event.target === friendActionOverlay) {
+    closeFriendActionMenu();
+  }
+});
+
+sendFriendCoinsButton?.addEventListener("click", async () => {
+  if (typeof friendActionSubmitHandler !== "function") return;
+
+  const amount = Math.floor(Number(friendTransferAmountInput.value));
+  if (!Number.isFinite(amount) || amount < 1) {
+    setFriendActionStatus("Bitte gib mindestens 1 Coin ein.", "error");
+    return;
+  }
+
+  setFriendActionStatus("Coins werden geschickt...");
+  try {
+    const result = await friendActionSubmitHandler(amount);
+    if (result?.ok) {
+      setFriendActionStatus(result.message || "Coins wurden geschickt.", "success");
+      window.setTimeout(() => {
+        closeFriendActionMenu();
+      }, 700);
+      return;
+    }
+
+    setFriendActionStatus(result?.message || "Coins konnten nicht geschickt werden.", "error");
+  } catch (error) {
+    setFriendActionStatus(error?.message || "Coins konnten nicht geschickt werden.", "error");
+  }
+});
+
+removeFriendActionButton?.addEventListener("click", async () => {
+  if (typeof friendActionRemoveHandler !== "function") return;
+  if (!window.confirm("Freund wirklich löschen?")) return;
+
+  setFriendActionStatus("Freund wird entfernt...");
+  try {
+    const result = await friendActionRemoveHandler();
+    if (result?.ok) {
+      setFriendActionStatus(result.message || "Freund wurde entfernt.", "success");
+      window.setTimeout(() => {
+        closeFriendActionMenu();
+      }, 700);
+      return;
+    }
+
+    setFriendActionStatus(result?.message || "Freund konnte nicht entfernt werden.", "error");
+  } catch (error) {
+    setFriendActionStatus(error?.message || "Freund konnte nicht entfernt werden.", "error");
   }
 });
 
@@ -166,17 +270,23 @@ aceAsElevenButton?.addEventListener("click", () => {
 function loadAppData() {
   const raw = window.localStorage.getItem(STORAGE_KEY);
   if (!raw) {
-    return { users: [], currentUserId: null };
+    return { users: [], currentUserId: null, friendRequests: [] };
   }
 
   try {
     const parsed = JSON.parse(raw);
     return {
-      users: Array.isArray(parsed.users) ? parsed.users : [],
+      users: Array.isArray(parsed.users)
+        ? parsed.users.map((user) => ({
+          ...user,
+          friends: Array.isArray(user.friends) ? user.friends : [],
+        }))
+        : [],
       currentUserId: parsed.currentUserId ?? null,
+      friendRequests: Array.isArray(parsed.friendRequests) ? parsed.friendRequests : [],
     };
   } catch {
-    return { users: [], currentUserId: null };
+    return { users: [], currentUserId: null, friendRequests: [] };
   }
 }
 
@@ -205,6 +315,204 @@ function getCurrentUser() {
 
 function findUserByPlayerId(playerId) {
   return state.appData.users.find((user) => user.playerId.toUpperCase() === playerId.toUpperCase()) || null;
+}
+
+function getPendingFriendRequests() {
+  return Array.isArray(state.appData.friendRequests) ? state.appData.friendRequests : [];
+}
+
+function getIncomingFriendRequestsForUser(userId) {
+  return getPendingFriendRequests()
+    .filter((request) => request.toUserId === userId)
+    .map((request) => ({
+      ...request,
+      user: state.appData.users.find((entry) => entry.id === request.fromUserId) || null,
+    }))
+    .filter((request) => request.user);
+}
+
+function getOutgoingFriendRequestsForUser(userId) {
+  return getPendingFriendRequests()
+    .filter((request) => request.fromUserId === userId)
+    .map((request) => ({
+      ...request,
+      user: state.appData.users.find((entry) => entry.id === request.toUserId) || null,
+    }))
+    .filter((request) => request.user);
+}
+
+function createLocalFriendRequest(fromUserId, toUserId) {
+  return {
+    id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+    fromUserId,
+    toUserId,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function areUsersFriends(userA, userB) {
+  if (!userA || !userB) return false;
+  return userA.friends.includes(userB.playerId) && userB.friends.includes(userA.playerId);
+}
+
+function addFriendshipBetweenUsers(userA, userB) {
+  if (!userA.friends.includes(userB.playerId)) {
+    userA.friends.push(userB.playerId);
+  }
+  if (!userB.friends.includes(userA.playerId)) {
+    userB.friends.push(userA.playerId);
+  }
+}
+
+function removeFriendshipBetweenUsers(userA, userB) {
+  if (!userA || !userB) return;
+  userA.friends = userA.friends.filter((friendId) => friendId !== userB.playerId);
+  userB.friends = userB.friends.filter((friendId) => friendId !== userA.playerId);
+}
+
+function removeFriendRequest(requestId) {
+  state.appData.friendRequests = getPendingFriendRequests().filter((request) => request.id !== requestId);
+}
+
+function renderFriendSections({
+  friends = [],
+  incomingRequests = [],
+  outgoingRequests = [],
+  onOpenFriendMenu = null,
+  onAcceptRequest = null,
+  onDeclineRequest = null,
+  onCancelRequest = null,
+}) {
+  const renderEmpty = (list, text) => {
+    list.innerHTML = "";
+    const item = document.createElement("li");
+    item.textContent = text;
+    list.appendChild(item);
+  };
+
+  if (!friendsList || !friendRequestsList || !friendOutgoingList) return;
+
+  if (friends.length === 0) {
+    renderEmpty(friendsList, "Keine Freunde hinzugefügt.");
+  } else {
+    friendsList.innerHTML = "";
+    friends.forEach((friend) => {
+      const item = document.createElement("li");
+      item.innerHTML = `
+        <div class="friend-entry">
+          <div class="friend-main">
+            <div class="friend-name">${friend.username}</div>
+            <div class="friend-meta">${friend.playerId} · ${friend.coins} Coins</div>
+          </div>
+          <div class="friend-inline-actions">
+            <button class="button secondary icon-button" type="button" data-friend-menu="${friend.playerId}" aria-label="Freund-Menü öffnen">⚙</button>
+          </div>
+        </div>
+      `;
+      friendsList.appendChild(item);
+    });
+
+    if (typeof onOpenFriendMenu === "function") {
+      friendsList.querySelectorAll("[data-friend-menu]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const friend = friends.find((entry) => entry.playerId === button.dataset.friendMenu);
+          if (friend) onOpenFriendMenu(friend);
+        });
+      });
+    }
+  }
+
+  if (incomingRequests.length === 0) {
+    renderEmpty(friendRequestsList, "Keine offenen Anfragen.");
+  } else {
+    friendRequestsList.innerHTML = "";
+    incomingRequests.forEach((request) => {
+      const item = document.createElement("li");
+      item.innerHTML = `
+        <div class="friend-entry">
+          <div class="friend-main">
+            <div class="friend-name">${request.username}</div>
+            <div class="friend-meta">${request.playerId}</div>
+          </div>
+          <div class="friend-inline-actions">
+            <button class="button secondary small-button" type="button" data-accept-request="${request.id}">Annehmen</button>
+            <button class="button secondary small-button" type="button" data-decline-request="${request.id}">Ablehnen</button>
+          </div>
+        </div>
+      `;
+      friendRequestsList.appendChild(item);
+    });
+
+    if (typeof onAcceptRequest === "function") {
+      friendRequestsList.querySelectorAll("[data-accept-request]").forEach((button) => {
+        button.addEventListener("click", () => {
+          void onAcceptRequest(button.dataset.acceptRequest);
+        });
+      });
+    }
+
+    if (typeof onDeclineRequest === "function") {
+      friendRequestsList.querySelectorAll("[data-decline-request]").forEach((button) => {
+        button.addEventListener("click", () => {
+          void onDeclineRequest(button.dataset.declineRequest);
+        });
+      });
+    }
+  }
+
+  if (outgoingRequests.length === 0) {
+    renderEmpty(friendOutgoingList, "Keine gesendeten Anfragen.");
+  } else {
+    friendOutgoingList.innerHTML = "";
+    outgoingRequests.forEach((request) => {
+      const item = document.createElement("li");
+      item.innerHTML = `
+        <div class="friend-entry">
+          <div class="friend-main">
+            <div class="friend-name">${request.username}</div>
+            <div class="friend-meta">${request.playerId}</div>
+          </div>
+          <div class="friend-inline-actions">
+            <button class="button secondary small-button" type="button" data-cancel-request="${request.id}">Zurückziehen</button>
+          </div>
+        </div>
+      `;
+      friendOutgoingList.appendChild(item);
+    });
+
+    if (typeof onCancelRequest === "function") {
+      friendOutgoingList.querySelectorAll("[data-cancel-request]").forEach((button) => {
+        button.addEventListener("click", () => {
+          void onCancelRequest(button.dataset.cancelRequest);
+        });
+      });
+    }
+  }
+}
+
+function sendCoinsToLocalFriend(targetPlayerId, amount) {
+  const currentUser = getCurrentUser();
+  const targetUser = findUserByPlayerId(targetPlayerId);
+  const numericAmount = Math.floor(Number(amount));
+
+  if (!currentUser) {
+    return { ok: false, message: "Bitte zuerst einloggen." };
+  }
+  if (!targetUser || !areUsersFriends(currentUser, targetUser)) {
+    return { ok: false, message: "Dieser Spieler ist nicht in deiner Freundesliste." };
+  }
+  if (!Number.isFinite(numericAmount) || numericAmount < 1) {
+    return { ok: false, message: "Bitte gib mindestens 1 Coin ein." };
+  }
+  if (currentUser.coins < numericAmount) {
+    return { ok: false, message: "Du hast nicht genug Coins." };
+  }
+
+  currentUser.coins -= numericAmount;
+  targetUser.coins += numericAmount;
+  syncCurrentUser();
+  logActivity(`${currentUser.username} hat ${targetUser.username} ${numericAmount} Coins geschickt.`);
+  return { ok: true, message: `${numericAmount} Coins an ${targetUser.username} geschickt.` };
 }
 
 function updateBalance() {
@@ -1032,20 +1340,87 @@ function renderProfile() {
   profilePlayerId.textContent = currentUser ? currentUser.playerId : "-";
   profileCoins.textContent = currentUser ? String(currentUser.coins) : "0";
   changeUsernameInput.value = currentUser ? currentUser.username : "";
-  friendsList.innerHTML = "";
 
-  if (!currentUser || currentUser.friends.length === 0) {
-    const item = document.createElement("li");
-    item.textContent = "Keine Freunde hinzugefügt.";
-    friendsList.appendChild(item);
+  if (!currentUser) {
+    renderFriendSections({});
     return;
   }
 
-  currentUser.friends.forEach((friendId) => {
-    const friend = findUserByPlayerId(friendId);
-    const item = document.createElement("li");
-    item.textContent = friend ? `${friend.username} (${friend.playerId})` : friendId;
-    friendsList.appendChild(item);
+  const friends = currentUser.friends
+    .map((friendId) => findUserByPlayerId(friendId))
+    .filter(Boolean)
+    .map((friend) => ({
+      id: friend.id,
+      username: friend.username,
+      playerId: friend.playerId,
+      coins: friend.coins,
+    }));
+
+  const incomingRequests = getIncomingFriendRequestsForUser(currentUser.id).map((request) => ({
+    id: request.id,
+    username: request.user.username,
+    playerId: request.user.playerId,
+  }));
+
+  const outgoingRequests = getOutgoingFriendRequestsForUser(currentUser.id).map((request) => ({
+    id: request.id,
+    username: request.user.username,
+    playerId: request.user.playerId,
+  }));
+
+  renderFriendSections({
+    friends,
+    incomingRequests,
+    outgoingRequests,
+    onOpenFriendMenu: (friend) => {
+      openFriendActionMenu({
+        title: `${friend.username} (${friend.playerId})`,
+        info: "Schicke diesem bestätigten Freund einen Betrag aus deinem Coin-Guthaben.",
+        onSubmit: async (amount) => sendCoinsToLocalFriend(friend.playerId, amount),
+        onRemove: async () => {
+          const activeUser = getCurrentUser();
+          const targetUser = findUserByPlayerId(friend.playerId);
+
+          if (!activeUser) {
+            return { ok: false, message: "Bitte zuerst einloggen." };
+          }
+          if (!targetUser || !areUsersFriends(activeUser, targetUser)) {
+            return { ok: false, message: "Dieser Spieler ist nicht mehr in deiner Freundesliste." };
+          }
+
+          removeFriendshipBetweenUsers(activeUser, targetUser);
+          syncCurrentUser();
+          showAuthMessage(`${targetUser.username} wurde aus deiner Freundesliste entfernt.`);
+          logActivity(`${activeUser.username} hat ${targetUser.username} aus der Freundesliste entfernt.`);
+          return { ok: true, message: `${targetUser.username} wurde entfernt.` };
+        },
+      });
+    },
+    onAcceptRequest: async (requestId) => {
+      const request = getIncomingFriendRequestsForUser(currentUser.id).find((entry) => entry.id === requestId);
+      if (!request || !request.user) return;
+      addFriendshipBetweenUsers(currentUser, request.user);
+      removeFriendRequest(requestId);
+      syncCurrentUser();
+      showAuthMessage(`${request.user.username} ist jetzt mit dir befreundet.`);
+      logActivity(`${currentUser.username} und ${request.user.username} sind jetzt befreundet.`);
+    },
+    onDeclineRequest: async (requestId) => {
+      const request = getIncomingFriendRequestsForUser(currentUser.id).find((entry) => entry.id === requestId);
+      removeFriendRequest(requestId);
+      syncCurrentUser();
+      if (request?.user) {
+        showAuthMessage(`Anfrage von ${request.user.username} abgelehnt.`);
+      }
+    },
+    onCancelRequest: async (requestId) => {
+      const request = getOutgoingFriendRequestsForUser(currentUser.id).find((entry) => entry.id === requestId);
+      removeFriendRequest(requestId);
+      syncCurrentUser();
+      if (request?.user) {
+        showAuthMessage(`Anfrage an ${request.user.username} zurückgezogen.`);
+      }
+    },
   });
 }
 
@@ -1129,6 +1504,8 @@ function setAdminMode(isUnlocked) {
 function syncCurrentUser() {
   if (state.appData.currentUserId) {
     state.currentProfile = state.appData.users.find((user) => user.id === state.appData.currentUserId) || null;
+  } else {
+    state.currentProfile = null;
   }
   updateBalance();
   renderProfile();
@@ -1210,6 +1587,7 @@ function deleteUserById(userId) {
   if (!user) return;
 
   state.appData.users = state.appData.users.filter((entry) => entry.id !== userId);
+  state.appData.friendRequests = getPendingFriendRequests().filter((request) => request.fromUserId !== userId && request.toUserId !== userId);
   state.appData.users.forEach((entry) => {
     entry.friends = entry.friends.filter((friendId) => friendId !== user.playerId);
   });
@@ -2501,7 +2879,7 @@ authTabs.forEach((tab) => {
 document.querySelector("#addFriendButton").addEventListener("click", () => {
   const currentUser = getCurrentUser();
   if (!currentUser) {
-    showAuthMessage("Bitte zuerst einloggen, um Freunde hinzuzufuegen.");
+    showAuthMessage("Bitte zuerst einloggen, um Freunde hinzuzufügen.");
     return;
   }
 
@@ -2518,16 +2896,28 @@ document.querySelector("#addFriendButton").addEventListener("click", () => {
     return;
   }
 
-  if (currentUser.friends.includes(friend.playerId)) {
+  if (areUsersFriends(currentUser, friend)) {
     showAuthMessage("Dieser Spieler ist bereits in deiner Freundesliste.");
     return;
   }
 
-  currentUser.friends.push(friend.playerId);
+  const outgoingRequest = getOutgoingFriendRequestsForUser(currentUser.id).find((request) => request.user?.id === friend.id);
+  if (outgoingRequest) {
+    showAuthMessage("An diesen Spieler wurde bereits eine Anfrage gesendet.");
+    return;
+  }
+
+  const incomingRequest = getIncomingFriendRequestsForUser(currentUser.id).find((request) => request.user?.id === friend.id);
+  if (incomingRequest) {
+    showAuthMessage("Dieser Spieler hat dir schon eine Anfrage geschickt. Nimm sie unten an.");
+    return;
+  }
+
+  state.appData.friendRequests.push(createLocalFriendRequest(currentUser.id, friend.id));
   friendPlayerIdInput.value = "";
   syncCurrentUser();
-  showAuthMessage(`${friend.username} wurde als Freund hinzugefügt.`);
-  logActivity(`${currentUser.username} hat ${friend.username} geaddet.`);
+  showAuthMessage(`Freundesanfrage an ${friend.username} gesendet.`);
+  logActivity(`${currentUser.username} hat ${friend.username} eine Freundesanfrage geschickt.`);
 });
 
 changeUsernameButton.addEventListener("click", () => {

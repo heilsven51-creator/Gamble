@@ -388,6 +388,117 @@ h3 {
   word-break: break-word;
 }
 
+.relation-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+.relation-list li {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.friend-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.friend-main {
+  min-width: 0;
+}
+
+.friend-name {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.friend-meta {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.friend-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.small-button,
+.icon-button {
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 0.86rem;
+}
+
+.icon-button {
+  min-width: 40px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 1rem;
+}
+
+.friend-action-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 10, 19, 0.72);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
+.friend-action-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.friend-action-dialog {
+  width: min(440px, 100%);
+  padding: 26px;
+  border-radius: 26px;
+  border: 1px solid rgba(240, 193, 90, 0.18);
+  background:
+    radial-gradient(circle at top, rgba(240, 193, 90, 0.12), transparent 46%),
+    linear-gradient(180deg, rgba(17, 29, 49, 0.96), rgba(8, 15, 28, 0.96));
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.42);
+  transform: translateY(16px) scale(0.98);
+  transition: transform 180ms ease;
+}
+
+.friend-action-overlay.visible .friend-action-dialog {
+  transform: translateY(0) scale(1);
+}
+
+.friend-action-status {
+  min-height: 22px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.friend-action-status.success {
+  color: var(--green);
+}
+
+.friend-action-status.error {
+  color: #ff9d96;
+}
+
+.friend-action-buttons {
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
 .admin-panel {
   margin-top: 22px;
   padding-top: 18px;

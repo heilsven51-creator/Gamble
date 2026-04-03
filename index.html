@@ -102,12 +102,26 @@
 
             <label for="friendPlayerId">Freund per Spieler-ID adden</label>
             <input id="friendPlayerId" type="text" placeholder="z. B. PLY123456">
-            <button class="button secondary" id="addFriendButton">Freund hinzufügen</button>
+            <button class="button secondary" id="addFriendButton">Anfrage senden</button>
+
+            <div>
+              <p class="panel-label compact">Eingehende Anfragen</p>
+              <ul id="friendRequestsList" class="simple-list relation-list">
+                <li>Keine offenen Anfragen.</li>
+              </ul>
+            </div>
+
+            <div>
+              <p class="panel-label compact">Gesendete Anfragen</p>
+              <ul id="friendOutgoingList" class="simple-list relation-list">
+                <li>Keine gesendeten Anfragen.</li>
+              </ul>
+            </div>
 
             <div>
               <p class="panel-label compact">Freunde</p>
-              <ul id="friendsList" class="simple-list">
-                <li>Keine Freunde hinzugefuegt.</li>
+              <ul id="friendsList" class="simple-list relation-list">
+                <li>Keine Freunde hinzugefügt.</li>
               </ul>
             </div>
           </div>
@@ -372,6 +386,22 @@
       <div class="actions ace-choice-actions">
         <button class="button secondary" id="aceAsOne">Als 1 zählen</button>
         <button class="button primary" id="aceAsEleven">Als 11 zählen</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="friendActionOverlay" class="friend-action-overlay hidden" aria-live="polite">
+    <div class="friend-action-dialog">
+      <p class="panel-label">Freund-Menü</p>
+      <h3 id="friendActionTitle">Freund</h3>
+      <p id="friendActionInfo" class="result-detail">Sende einem bestätigten Freund Coins.</p>
+      <label for="friendTransferAmount">Coins senden</label>
+      <input id="friendTransferAmount" type="number" min="1" step="1" value="100">
+      <p id="friendActionStatus" class="friend-action-status"></p>
+      <div class="actions friend-action-buttons">
+        <button class="button secondary" id="closeFriendAction">Schließen</button>
+        <button class="button secondary danger-button hidden" id="removeFriendAction">Freund lÃ¶schen</button>
+        <button class="button primary" id="sendFriendCoins">Coins schicken</button>
       </div>
     </div>
   </div>

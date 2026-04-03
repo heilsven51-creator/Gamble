@@ -8,6 +8,8 @@ const liveState = {
   profile: null,
   profiles: [],
   friends: [],
+  incomingFriendRequests: [],
+  outgoingFriendRequests: [],
   activeWorkTask: null,
 };
 
@@ -23,6 +25,15 @@ function normalizeProfile(profile) {
     ...profile,
     coins: Number(profile?.coins ?? 0),
     work_completed: Number(profile?.work_completed ?? 0),
+  };
+}
+
+function normalizeFriendProfile(profile) {
+  if (!profile) return null;
+  const normalizedProfile = normalizeProfile(profile);
+  return {
+    ...normalizedProfile,
+    playerId: normalizedProfile.player_id,
   };
 }
 
@@ -120,6 +131,8 @@ async function liveFetchProfile() {
   if (!liveState.user) {
     liveState.profile = null;
     liveState.friends = [];
+    liveState.incomingFriendRequests = [];
+    liveState.outgoingFriendRequests = [];
     state.currentProfile = null;
     return;
   }
@@ -128,16 +141,87 @@ async function liveFetchProfile() {
 
   if (!liveState.profile) {
     liveState.friends = [];
+    liveState.incomingFriendRequests = [];
+    liveState.outgoingFriendRequests = [];
     state.currentProfile = null;
     return;
   }
 
-  const { data: friendsData } = await liveClient
+  const { data: sentFriendRows, error: sentError } = await liveClient
     .from("friends")
-    .select("friend:friend_id(id, username, player_id, coins)")
+    .select("id, user_id, friend_id, created_at, friend:friend_id(id, username, player_id, coins)")
     .eq("user_id", liveState.user.id);
 
-  liveState.friends = (friendsData || []).map((row) => row.friend).filter(Boolean);
+  const { data: receivedFriendRows, error: receivedError } = await liveClient
+    .from("friends")
+    .select("id, user_id, friend_id, created_at, requester:user_id(id, username, player_id, coins)")
+    .eq("friend_id", liveState.user.id);
+
+  if (sentError || receivedError) {
+    authMessage.textContent = sentError?.message || receivedError?.message || "Freunde konnten nicht geladen werden.";
+    liveState.friends = [];
+    liveState.incomingFriendRequests = [];
+    liveState.outgoingFriendRequests = [];
+    state.currentProfile = liveState.profile;
+    return;
+  }
+
+  const sentRows = (sentFriendRows || []).map((row) => ({
+    ...row,
+    friend: normalizeFriendProfile(row.friend),
+  }));
+  const receivedRows = (receivedFriendRows || []).map((row) => ({
+    ...row,
+    requester: normalizeFriendProfile(row.requester),
+  }));
+
+  const sentMap = new Map(sentRows.map((row) => [row.friend_id, row]));
+  const receivedMap = new Map(receivedRows.map((row) => [row.user_id, row]));
+  const acceptedFriends = new Map();
+
+  liveState.outgoingFriendRequests = sentRows
+    .filter((row) => !receivedMap.has(row.friend_id) && row.friend)
+    .map((row) => ({
+      id: row.id,
+      userId: row.friend_id,
+      username: row.friend.username,
+      playerId: row.friend.player_id,
+      coins: row.friend.coins,
+    }));
+
+  liveState.incomingFriendRequests = receivedRows
+    .filter((row) => !sentMap.has(row.user_id) && row.requester)
+    .map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      username: row.requester.username,
+      playerId: row.requester.player_id,
+      coins: row.requester.coins,
+    }));
+
+  sentRows.forEach((row) => {
+    if (receivedMap.has(row.friend_id) && row.friend) {
+      acceptedFriends.set(row.friend_id, {
+        id: row.friend_id,
+        username: row.friend.username,
+        playerId: row.friend.player_id,
+        coins: row.friend.coins,
+      });
+    }
+  });
+
+  receivedRows.forEach((row) => {
+    if (sentMap.has(row.user_id) && row.requester) {
+      acceptedFriends.set(row.user_id, {
+        id: row.user_id,
+        username: row.requester.username,
+        playerId: row.requester.player_id,
+        coins: row.requester.coins,
+      });
+    }
+  });
+
+  liveState.friends = [...acceptedFriends.values()];
   state.currentProfile = liveState.profile;
 }
 
@@ -154,18 +238,40 @@ function liveRenderProfile() {
     syncBetInputs();
   }
 
-  friendsList.innerHTML = "";
-  if (liveState.friends.length === 0) {
-    const item = document.createElement("li");
-    item.textContent = "Keine Freunde hinzugefügt.";
-    friendsList.appendChild(item);
-    return;
-  }
-
-  liveState.friends.forEach((friend) => {
-    const item = document.createElement("li");
-    item.textContent = `${friend.username} (${friend.player_id})`;
-    friendsList.appendChild(item);
+  renderFriendSections({
+    friends: liveState.friends.map((friend) => ({
+      id: friend.id,
+      username: friend.username,
+      playerId: friend.playerId || friend.player_id,
+      coins: friend.coins,
+    })),
+    incomingRequests: liveState.incomingFriendRequests.map((request) => ({
+      id: request.id,
+      username: request.username,
+      playerId: request.playerId,
+    })),
+    outgoingRequests: liveState.outgoingFriendRequests.map((request) => ({
+      id: request.id,
+      username: request.username,
+      playerId: request.playerId,
+    })),
+    onOpenFriendMenu: (friend) => {
+      openFriendActionMenu({
+        title: `${friend.username} (${friend.playerId})`,
+        info: "Schicke diesem bestätigten Freund einen Betrag aus deinem Coin-Guthaben.",
+        onSubmit: async (amount) => liveSendCoinsToFriend(friend.playerId, amount),
+        onRemove: async () => liveRemoveFriend(friend.playerId),
+      });
+    },
+    onAcceptRequest: async (requestId) => {
+      await liveAcceptFriendRequest(requestId);
+    },
+    onDeclineRequest: async (requestId) => {
+      await liveDeclineFriendRequest(requestId);
+    },
+    onCancelRequest: async (requestId) => {
+      await liveCancelOutgoingFriendRequest(requestId);
+    },
   });
 }
 
@@ -347,6 +453,134 @@ function liveRequireUser(statusSelector) {
   if (statusSelector) setStatus(statusSelector, "Login nötig");
   authMessage.textContent = "Bitte erst einloggen.";
   return null;
+}
+
+async function liveAcceptFriendRequest(requestId) {
+  if (!liveState.profile) {
+    authMessage.textContent = "Bitte zuerst einloggen, um Anfragen anzunehmen.";
+    return false;
+  }
+
+  const request = liveState.incomingFriendRequests.find((entry) => entry.id === requestId);
+  if (!request) {
+    authMessage.textContent = "Freundesanfrage nicht gefunden.";
+    return false;
+  }
+
+  const { error } = await liveClient
+    .from("friends")
+    .insert({ user_id: resolveProfileId(), friend_id: request.userId });
+
+  if (error) {
+    authMessage.textContent = error.message || "Freundesanfrage konnte nicht angenommen werden.";
+    return false;
+  }
+
+  await liveSync();
+  authMessage.textContent = `${request.username} ist jetzt mit dir befreundet.`;
+  logActivity(`${liveState.profile.username} und ${request.username} sind jetzt befreundet.`);
+  return true;
+}
+
+async function liveDeclineFriendRequest(requestId) {
+  if (!liveState.profile) {
+    authMessage.textContent = "Bitte zuerst einloggen, um Anfragen abzulehnen.";
+    return false;
+  }
+
+  const request = liveState.incomingFriendRequests.find((entry) => entry.id === requestId);
+  const { error } = await liveClient.from("friends").delete().eq("id", requestId);
+
+  if (error) {
+    authMessage.textContent = error.message || "Freundesanfrage konnte nicht gelöscht werden.";
+    return false;
+  }
+
+  await liveSync();
+  if (request) {
+    authMessage.textContent = `Anfrage von ${request.username} abgelehnt.`;
+  }
+  return true;
+}
+
+async function liveCancelOutgoingFriendRequest(requestId) {
+  if (!liveState.profile) {
+    authMessage.textContent = "Bitte zuerst einloggen, um Anfragen zurückzuziehen.";
+    return false;
+  }
+
+  const request = liveState.outgoingFriendRequests.find((entry) => entry.id === requestId);
+  const { error } = await liveClient.from("friends").delete().eq("id", requestId);
+
+  if (error) {
+    authMessage.textContent = error.message || "Anfrage konnte nicht zurückgezogen werden.";
+    return false;
+  }
+
+  await liveSync();
+  if (request) {
+    authMessage.textContent = `Anfrage an ${request.username} zurückgezogen.`;
+  }
+  return true;
+}
+
+async function liveSendCoinsToFriend(targetPlayerId, amount) {
+  if (!liveState.profile) {
+    return { ok: false, message: "Bitte zuerst einloggen." };
+  }
+
+  const numericAmount = Math.floor(Number(amount));
+  if (!Number.isFinite(numericAmount) || numericAmount < 1) {
+    return { ok: false, message: "Bitte gib mindestens 1 Coin ein." };
+  }
+
+  const friend = liveState.friends.find((entry) => (entry.playerId || entry.player_id) === targetPlayerId);
+  if (!friend) {
+    return { ok: false, message: "Dieser Spieler ist nicht in deiner Freundesliste." };
+  }
+
+  const { data, error } = await liveClient.rpc("transfer_friend_coins", {
+    target_player_id: targetPlayerId,
+    transfer_amount: numericAmount,
+  });
+
+  if (error) {
+    return { ok: false, message: error.message || "Coins konnten nicht geschickt werden." };
+  }
+
+  await liveSync();
+  logActivity(`${liveState.profile.username} hat ${friend.username} ${numericAmount} Coins geschickt.`);
+  return {
+    ok: true,
+    message: data?.message || `${numericAmount} Coins an ${friend.username} geschickt.`,
+  };
+}
+
+async function liveRemoveFriend(targetPlayerId) {
+  if (!liveState.profile) {
+    return { ok: false, message: "Bitte zuerst einloggen." };
+  }
+
+  const friend = liveState.friends.find((entry) => (entry.playerId || entry.player_id) === targetPlayerId);
+  if (!friend) {
+    return { ok: false, message: "Dieser Spieler ist nicht in deiner Freundesliste." };
+  }
+
+  const { data, error } = await liveClient.rpc("remove_friendship", {
+    target_player_id: targetPlayerId,
+  });
+
+  if (error) {
+    return { ok: false, message: error.message || "Freund konnte nicht entfernt werden." };
+  }
+
+  await liveSync();
+  authMessage.textContent = `${friend.username} wurde aus deiner Freundesliste entfernt.`;
+  logActivity(`${liveState.profile.username} hat ${friend.username} aus der Freundesliste entfernt.`);
+  return {
+    ok: true,
+    message: data?.message || `${friend.username} wurde entfernt.`,
+  };
 }
 
 function renderAdminAccountsLive() {
@@ -536,15 +770,28 @@ function installLiveHandlers() {
       return;
     }
 
+    const outgoingExists = liveState.outgoingFriendRequests.some((request) => request.userId === target.id);
+    if (outgoingExists) {
+      authMessage.textContent = "An diesen Spieler wurde bereits eine Anfrage gesendet.";
+      return;
+    }
+
+    const incomingExists = liveState.incomingFriendRequests.some((request) => request.userId === target.id);
+    if (incomingExists) {
+      authMessage.textContent = "Dieser Spieler hat dir schon eine Anfrage geschickt. Nimm sie unten an.";
+      return;
+    }
+
     const { error } = await liveClient.from("friends").insert({ user_id: resolveProfileId(), friend_id: target.id });
     if (error) {
-      authMessage.textContent = error.message || "Freund konnte nicht hinzugefügt werden.";
+      authMessage.textContent = error.message || "Freundesanfrage konnte nicht geschickt werden.";
       return;
     }
 
     friendPlayerIdInput.value = "";
     await liveSync();
-    authMessage.textContent = `${target.username} wurde als Freund hinzugefügt.`;
+    authMessage.textContent = `Freundesanfrage an ${target.username} gesendet.`;
+    logActivity(`${liveState.profile.username} hat ${target.username} eine Freundesanfrage geschickt.`);
   });
 
   const claimDailyButton = replaceNode("#claimDailyReward");
