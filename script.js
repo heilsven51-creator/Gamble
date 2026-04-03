@@ -106,6 +106,15 @@ const slotSymbolMap = {
   bell: { display: "🔔", className: "slot-bell" },
   diamond: { display: "💎", className: "slot-diamond" },
 };
+const slotPayoutMultipliers = {
+  seven: 8,
+  diamond: 6,
+  bell: 5,
+  cherry: 4,
+  grapes: 3,
+  lemon: 2.5,
+  pair: 1.5,
+};
 const horseNames = ["Blaze", "Storm", "Nova", "Comet"];
 const WORK_LIMIT_PER_DAY = 10;
 const RESULT_SCREEN_DURATION = 3200;
@@ -1703,6 +1712,35 @@ function generateSlotOutcome() {
   return result;
 }
 
+function getSlotPayoutDetails(result, bet) {
+  const uniqueCount = new Set(result).size;
+
+  if (uniqueCount === 1) {
+    const symbol = result[0];
+    const multiplier = slotPayoutMultipliers[symbol] || 3;
+    return {
+      payout: Math.max(1, Math.round(bet * multiplier)),
+      multiplier,
+      label: `3x ${formatSlotSymbol(symbol)}`,
+    };
+  }
+
+  if (uniqueCount === 2) {
+    const multiplier = slotPayoutMultipliers.pair;
+    return {
+      payout: Math.max(1, Math.round(bet * multiplier)),
+      multiplier,
+      label: "2 gleiche",
+    };
+  }
+
+  return {
+    payout: 0,
+    multiplier: 0,
+    label: "Keine Kombination",
+  };
+}
+
 function renderReel(reel, sequence) {
   reel.innerHTML = "";
   sequence.forEach((symbol) => {
@@ -2761,27 +2799,21 @@ document.querySelector("#spinSlots").addEventListener("click", async () => {
     reel.style.transform = "translateY(0)";
   });
 
-  const uniqueCount = new Set(finalSymbols).size;
-  let payout = 0;
-
-  if (uniqueCount === 1) {
-    payout = bet * 5;
-  } else if (uniqueCount === 2) {
-    payout = bet * 2;
-  }
+  const slotPayout = getSlotPayoutDetails(finalSymbols, bet);
+  const payout = slotPayout.payout;
 
   if (payout > 0) {
     await adjustBalance(payout, currentUser);
     setStatus("#slotsStatus", "Treffer");
-    slotsResult.textContent = `Treffer! Auszahlung: ${payout} Coins.`;
+    slotsResult.textContent = `Treffer! ${slotPayout.label} zahlt x${slotPayout.multiplier} = ${payout} Coins.`;
     showGameResult({
       game: "Slots",
       title: "Slots gewonnen",
       amount: payout - bet,
-      detail: `Die Walzen zahlen ${payout} Coins aus. ${buildBalanceLine()}`,
+      detail: `${slotPayout.label} zahlt x${slotPayout.multiplier}. Auszahlung: ${payout} Coins. ${buildBalanceLine()}`,
       variant: "win",
     });
-    logActivity(`Slots zahlen ${payout} Coins aus.`);
+    logActivity(`Slots: ${slotPayout.label} zahlt ${payout} Coins aus.`);
     state.slotsBusy = false;
     setBetLocked(slotsBetInput, false);
     return;
