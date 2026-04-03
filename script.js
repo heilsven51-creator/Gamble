@@ -17,6 +17,7 @@ const state = {
     activeHandIndex: 0,
     dealerRevealed: false,
     splitUsed: false,
+    aceChoice: null,
   },
   coinBusy: false,
   raceBusy: false,
@@ -77,7 +78,14 @@ const resultGameLabel = document.querySelector("#resultGameLabel");
 const resultTitle = document.querySelector("#resultTitle");
 const resultAmount = document.querySelector("#resultAmount");
 const resultDetail = document.querySelector("#resultDetail");
+const resultCoinBurst = document.querySelector("#resultCoinBurst");
+const resultLossTrend = document.querySelector("#resultLossTrend");
 const closeGameResultButton = document.querySelector("#closeGameResult");
+const blackjackAceOverlay = document.querySelector("#blackjackAceOverlay");
+const aceChoiceText = document.querySelector("#aceChoiceText");
+const aceChoiceTotals = document.querySelector("#aceChoiceTotals");
+const aceAsOneButton = document.querySelector("#aceAsOne");
+const aceAsElevenButton = document.querySelector("#aceAsEleven");
 
 const symbols = ["seven", "cherry", "lemon", "grapes", "bell", "diamond"];
 const slotSymbolMap = {
@@ -94,13 +102,20 @@ const RESULT_SCREEN_DURATION = 3200;
 const COIN_FLIP_DURATION = 1400;
 const BLACKJACK_DEAL_DELAY = 420;
 const DEALER_DRAW_DELAY = 750;
+const MAX_BLACKJACK_HANDS = 4;
 const RACE_STEP_DELAY = 320;
 const SLOT_REEL_START_DELAY = 1080;
 const SLOT_REEL_STEP_DELAY = 520;
 const SLOT_REEL_STOP_DURATION = 980;
 const DEALER_HITS_SOFT_17 = false;
+const SLOT_AUDIO_VOLUME = 2.35;
+const SLOT_MACHINE_SOUND_ENABLED = false;
 
 let resultOverlayTimer = null;
+let gameAudioContext = null;
+let gameAudioOutput = null;
+let blackjackCardSequence = 0;
+let blackjackAceOverlayTimer = null;
 
 coinVisual.innerHTML = `
   <div class="coin-face front" aria-label="Kopf"><span>K</span></div>
@@ -115,6 +130,37 @@ resultOverlay?.addEventListener("click", (event) => {
   if (event.target === resultOverlay) {
     hideGameResult();
   }
+});
+
+function hideBlackjackAceChoice() {
+  if (!blackjackAceOverlay) return;
+  if (blackjackAceOverlayTimer) {
+    window.clearTimeout(blackjackAceOverlayTimer);
+    blackjackAceOverlayTimer = null;
+  }
+  blackjackAceOverlay.classList.remove("visible");
+  blackjackAceOverlayTimer = window.setTimeout(() => {
+    blackjackAceOverlay.classList.add("hidden");
+    blackjackAceOverlayTimer = null;
+  }, 180);
+}
+
+function submitBlackjackAceChoice(value) {
+  const pendingChoice = state.blackjack.aceChoice;
+  if (!pendingChoice) return;
+
+  state.blackjack.aceChoice = null;
+  hideBlackjackAceChoice();
+  renderBlackjack();
+  pendingChoice.resolve(value);
+}
+
+aceAsOneButton?.addEventListener("click", () => {
+  submitBlackjackAceChoice(1);
+});
+
+aceAsElevenButton?.addEventListener("click", () => {
+  submitBlackjackAceChoice(11);
 });
 
 function loadAppData() {
@@ -191,6 +237,644 @@ function showAuthMessage(message) {
   authMessage.textContent = message;
 }
 
+function getGameAudioContext() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return null;
+
+  if (!gameAudioContext) {
+    gameAudioContext = new AudioContextClass();
+  }
+
+  return gameAudioContext;
+}
+
+async function unlockGameAudio() {
+  const context = getGameAudioContext();
+  if (!context) return null;
+
+  if (context.state === "suspended") {
+    try {
+      await context.resume();
+    } catch {
+      return null;
+    }
+  }
+
+  return context;
+}
+
+function getGameAudioOutput(context) {
+  if (!context) return null;
+
+  if (!gameAudioOutput || gameAudioOutput.context !== context) {
+    const compressor = context.createDynamicsCompressor();
+    compressor.threshold.setValueAtTime(-22, context.currentTime);
+    compressor.knee.setValueAtTime(24, context.currentTime);
+    compressor.ratio.setValueAtTime(12, context.currentTime);
+    compressor.attack.setValueAtTime(0.0015, context.currentTime);
+    compressor.release.setValueAtTime(0.16, context.currentTime);
+
+    const master = context.createGain();
+    master.gain.setValueAtTime(1.08, context.currentTime);
+
+    compressor.connect(master);
+    master.connect(context.destination);
+    gameAudioOutput = { context, compressor, master };
+  }
+
+  return gameAudioOutput.compressor;
+}
+
+function scheduleTone({
+  context,
+  frequency = 440,
+  startTime = 0,
+  duration = 0.12,
+  type = "sine",
+  gain = 0.03,
+  endFrequency = null,
+}) {
+  if (!context) return;
+
+  const oscillator = context.createOscillator();
+  const gainNode = context.createGain();
+
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, startTime);
+  if (typeof endFrequency === "number") {
+    oscillator.frequency.exponentialRampToValueAtTime(Math.max(1, endFrequency), startTime + duration);
+  }
+
+  const scaledGain = Math.min(gain * SLOT_AUDIO_VOLUME, 0.24);
+
+  gainNode.gain.setValueAtTime(0.0001, startTime);
+  gainNode.gain.exponentialRampToValueAtTime(scaledGain, startTime + 0.012);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+  oscillator.connect(gainNode);
+  gainNode.connect(getGameAudioOutput(context) || context.destination);
+  oscillator.start(startTime);
+  oscillator.stop(startTime + duration + 0.02);
+}
+
+function createNoiseBuffer(context, duration = 0.12) {
+  const sampleRate = context.sampleRate;
+  const frameCount = Math.max(1, Math.floor(sampleRate * duration));
+  const buffer = context.createBuffer(1, frameCount, sampleRate);
+  const channel = buffer.getChannelData(0);
+
+  for (let i = 0; i < frameCount; i += 1) {
+    channel[i] = Math.random() * 2 - 1;
+  }
+
+  return buffer;
+}
+
+function scheduleNoiseBurst({
+  context,
+  startTime = 0,
+  duration = 0.08,
+  gain = 0.02,
+  filterType = "bandpass",
+  frequency = 1200,
+  q = 1.6,
+}) {
+  if (!context) return;
+
+  const source = context.createBufferSource();
+  source.buffer = createNoiseBuffer(context, duration);
+
+  const filter = context.createBiquadFilter();
+  filter.type = filterType;
+  filter.frequency.setValueAtTime(frequency, startTime);
+  filter.Q.setValueAtTime(q, startTime);
+
+  const gainNode = context.createGain();
+  const scaledGain = Math.min(gain * SLOT_AUDIO_VOLUME, 0.22);
+
+  gainNode.gain.setValueAtTime(0.0001, startTime);
+  gainNode.gain.exponentialRampToValueAtTime(scaledGain, startTime + 0.008);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+  source.connect(filter);
+  filter.connect(gainNode);
+  gainNode.connect(getGameAudioOutput(context) || context.destination);
+  source.start(startTime);
+  source.stop(startTime + duration + 0.02);
+}
+
+function playSlotSpinSound(stopMoments = [3.5]) {
+  if (!SLOT_MACHINE_SOUND_ENABLED) return;
+  const context = getGameAudioContext();
+  if (!context) return;
+
+  const startTime = context.currentTime;
+  const lastStopMoment = stopMoments.length ? stopMoments[stopMoments.length - 1] : 3.5;
+  const totalDuration = Math.max((lastStopMoment || 3.5) + 0.22, 1.5);
+  const pulseInterval = 0.095;
+  const pulseCount = Math.max(10, Math.floor(totalDuration / pulseInterval));
+
+  scheduleTone({
+    context,
+    frequency: 82,
+    startTime,
+    duration: totalDuration + 0.24,
+    type: "sawtooth",
+    gain: 0.018,
+    endFrequency: 66,
+  });
+
+  scheduleTone({
+    context,
+    frequency: 128,
+    startTime,
+    duration: totalDuration + 0.12,
+    type: "triangle",
+    gain: 0.012,
+    endFrequency: 92,
+  });
+
+  for (let i = 0; i < pulseCount; i += 1) {
+    const time = startTime + i * pulseInterval;
+    const mechanicalBase = 232 + (i % 4) * 24;
+
+    scheduleTone({
+      context,
+      frequency: mechanicalBase,
+      startTime: time,
+      duration: 0.045,
+      type: "square",
+      gain: 0.026,
+      endFrequency: mechanicalBase - 42,
+    });
+
+    scheduleTone({
+      context,
+      frequency: 146 + (i % 3) * 12,
+      startTime: time + 0.008,
+      duration: 0.055,
+      type: "triangle",
+      gain: 0.017,
+      endFrequency: 104,
+    });
+
+    scheduleNoiseBurst({
+      context,
+      startTime: time,
+      duration: 0.042,
+      gain: 0.012,
+      filterType: "bandpass",
+      frequency: 1650 - (i % 4) * 115,
+      q: 2.3,
+    });
+
+    if (i % 2 === 0) {
+      scheduleNoiseBurst({
+        context,
+        startTime: time + 0.035,
+        duration: 0.03,
+        gain: 0.008,
+        filterType: "highpass",
+        frequency: 2600,
+        q: 0.9,
+      });
+    }
+  }
+
+  stopMoments.forEach((stopTime, index) => {
+    const accentBase = 340 + index * 40;
+    const preStopTimes = [stopTime - 0.22, stopTime - 0.11].filter((time) => time > 0.06);
+
+    preStopTimes.forEach((time, pulseIndex) => {
+      scheduleTone({
+        context,
+        frequency: accentBase + pulseIndex * 30,
+        startTime: startTime + time,
+        duration: 0.05,
+        type: "square",
+        gain: 0.03,
+        endFrequency: accentBase - 30,
+      });
+
+      scheduleNoiseBurst({
+        context,
+        startTime: startTime + time,
+        duration: 0.035,
+        gain: 0.014,
+        filterType: "bandpass",
+        frequency: 2200,
+        q: 2.9,
+      });
+    });
+  });
+
+  const tailTimes = [totalDuration - 0.46, totalDuration - 0.18].filter((time) => time > 0);
+  tailTimes.forEach((time, index) => {
+    scheduleTone({
+      context,
+      frequency: 360 + index * 55,
+      startTime: startTime + time,
+      duration: 0.08,
+      type: "square",
+      gain: 0.035,
+      endFrequency: 250,
+    });
+
+    scheduleNoiseBurst({
+      context,
+      startTime: startTime + time,
+      duration: 0.045,
+      gain: 0.018,
+      filterType: "bandpass",
+      frequency: 2100,
+      q: 2.6,
+    });
+  });
+}
+
+function playSlotStopSound(index) {
+  if (!SLOT_MACHINE_SOUND_ENABLED) return;
+  const context = getGameAudioContext();
+  if (!context) return;
+
+  const startTime = context.currentTime;
+  const base = 372 + index * 82;
+
+  scheduleTone({
+    context,
+    frequency: base,
+    startTime,
+    duration: 0.09,
+    type: "square",
+    gain: 0.05,
+    endFrequency: base - 92,
+  });
+
+  scheduleTone({
+    context,
+    frequency: base * 2.1,
+    startTime: startTime + 0.006,
+    duration: 0.082,
+    type: "triangle",
+    gain: 0.032,
+    endFrequency: base * 1.5,
+  });
+
+  scheduleTone({
+    context,
+    frequency: base * 0.62,
+    startTime: startTime + 0.024,
+    duration: 0.16,
+    type: "triangle",
+    gain: 0.036,
+    endFrequency: base * 0.42,
+  });
+
+  scheduleNoiseBurst({
+    context,
+    startTime,
+    duration: 0.07,
+    gain: 0.024,
+    filterType: "highpass",
+    frequency: 1650,
+    q: 1.1,
+  });
+
+  scheduleNoiseBurst({
+    context,
+    startTime: startTime + 0.018,
+    duration: 0.06,
+    gain: 0.018,
+    filterType: "bandpass",
+    frequency: 2400,
+    q: 3.1,
+  });
+}
+
+function playSlotResultSound(isWin, isBigWin = false) {
+  const context = getGameAudioContext();
+  if (!context) return;
+
+  const startTime = context.currentTime + 0.02;
+
+  if (isWin) {
+    const notes = isBigWin
+      ? [523.25, 659.25, 783.99, 1046.5, 1318.51, 1567.98]
+      : [523.25, 659.25, 783.99, 987.77];
+
+    scheduleTone({
+      context,
+      frequency: isBigWin ? 146.83 : 130.81,
+      startTime,
+      duration: isBigWin ? 0.82 : 0.56,
+      type: "sawtooth",
+      gain: 0.03,
+      endFrequency: isBigWin ? 164.81 : 146.83,
+    });
+
+    notes.forEach((note, index) => {
+      scheduleTone({
+        context,
+        frequency: note,
+        startTime: startTime + index * 0.12,
+        duration: isBigWin ? 0.28 : 0.21,
+        type: index % 2 === 0 ? "square" : "triangle",
+        gain: isBigWin ? 0.085 : 0.062,
+        endFrequency: note * 1.025,
+      });
+
+      scheduleNoiseBurst({
+        context,
+        startTime: startTime + index * 0.12,
+        duration: 0.045,
+        gain: 0.016,
+        filterType: "bandpass",
+        frequency: 2400 + index * 180,
+        q: 3.2,
+      });
+    });
+    return;
+  }
+
+  scheduleTone({
+    context,
+    frequency: 210,
+    startTime,
+    duration: 0.16,
+    type: "sawtooth",
+    gain: 0.04,
+    endFrequency: 150,
+  });
+
+  scheduleTone({
+    context,
+    frequency: 160,
+    startTime: startTime + 0.1,
+    duration: 0.22,
+    type: "square",
+    gain: 0.028,
+    endFrequency: 90,
+  });
+
+  scheduleNoiseBurst({
+    context,
+    startTime,
+    duration: 0.06,
+    gain: 0.022,
+    filterType: "highpass",
+    frequency: 900,
+    q: 1.2,
+  });
+}
+
+function playOverlayResultSound(variant, game = "") {
+  const context = getGameAudioContext();
+  if (!context) return;
+
+  const startTime = context.currentTime + 0.02;
+  const isBlackjack = game === "Blackjack";
+
+  if (variant === "win") {
+    const notes = isBlackjack
+      ? [392.0, 523.25, 659.25, 783.99]
+      : [440.0, 587.33, 698.46];
+
+    scheduleTone({
+      context,
+      frequency: isBlackjack ? 196.0 : 220.0,
+      startTime,
+      duration: isBlackjack ? 0.55 : 0.42,
+      type: "triangle",
+      gain: 0.028,
+      endFrequency: isBlackjack ? 246.94 : 261.63,
+    });
+
+    notes.forEach((note, index) => {
+      scheduleTone({
+        context,
+        frequency: note,
+        startTime: startTime + index * 0.12,
+        duration: 0.2,
+        type: index % 2 === 0 ? "triangle" : "sine",
+        gain: isBlackjack ? 0.05 : 0.042,
+        endFrequency: note * 1.02,
+      });
+    });
+    return;
+  }
+
+  if (variant === "push") {
+    scheduleTone({
+      context,
+      frequency: 392.0,
+      startTime,
+      duration: 0.18,
+      type: "sine",
+      gain: 0.02,
+      endFrequency: 392.0,
+    });
+
+    scheduleTone({
+      context,
+      frequency: 493.88,
+      startTime: startTime + 0.13,
+      duration: 0.18,
+      type: "sine",
+      gain: 0.02,
+      endFrequency: 493.88,
+    });
+    return;
+  }
+
+  scheduleTone({
+    context,
+    frequency: 246.94,
+    startTime,
+    duration: 0.15,
+    type: "sawtooth",
+    gain: 0.03,
+    endFrequency: 185.0,
+  });
+
+  scheduleTone({
+    context,
+    frequency: 164.81,
+    startTime: startTime + 0.1,
+    duration: 0.18,
+    type: "triangle",
+    gain: 0.022,
+    endFrequency: 123.47,
+  });
+}
+
+function clearResultCoinBurst() {
+  if (!resultCoinBurst) return;
+  resultCoinBurst.innerHTML = "";
+}
+
+function clearResultLossTrend() {
+  if (!resultLossTrend) return;
+  resultLossTrend.classList.remove("active");
+  resultLossTrend.innerHTML = "";
+}
+
+function spawnResultLossTrend() {
+  if (!resultLossTrend) return;
+
+  clearResultLossTrend();
+  const svgNs = "http://www.w3.org/2000/svg";
+  const width = 320;
+  const height = 120;
+
+  const defs = document.createElementNS(svgNs, "defs");
+  const gradient = document.createElementNS(svgNs, "linearGradient");
+  gradient.setAttribute("id", "resultLossFill");
+  gradient.setAttribute("x1", "0");
+  gradient.setAttribute("y1", "0");
+  gradient.setAttribute("x2", "0");
+  gradient.setAttribute("y2", "1");
+
+  const startStop = document.createElementNS(svgNs, "stop");
+  startStop.setAttribute("offset", "0%");
+  startStop.setAttribute("stop-color", "rgba(255, 93, 82, 0.34)");
+  const endStop = document.createElementNS(svgNs, "stop");
+  endStop.setAttribute("offset", "100%");
+  endStop.setAttribute("stop-color", "rgba(255, 93, 82, 0)");
+
+  gradient.appendChild(startStop);
+  gradient.appendChild(endStop);
+  defs.appendChild(gradient);
+  resultLossTrend.appendChild(defs);
+
+  [24, 52, 80, 108].forEach((y) => {
+    const line = document.createElementNS(svgNs, "line");
+    line.setAttribute("x1", "8");
+    line.setAttribute("x2", String(width - 8));
+    line.setAttribute("y1", String(y));
+    line.setAttribute("y2", String(y));
+    line.setAttribute("class", "result-loss-grid-line");
+    resultLossTrend.appendChild(line);
+  });
+
+  const points = [];
+  let currentY = 18 + Math.random() * 10;
+  for (let i = 0; i < 7; i += 1) {
+    const x = 14 + i * 48;
+    if (i === 0) {
+      points.push({ x, y: currentY });
+      continue;
+    }
+
+    const stepDown = 7 + Math.random() * 14;
+    const bounce = i === 2 || i === 4 ? -(Math.random() * 6) : 0;
+    currentY = Math.min(104, Math.max(18, currentY + stepDown + bounce));
+    points.push({ x, y: currentY });
+  }
+
+  points[points.length - 1].y = Math.max(points[points.length - 1].y, 98);
+
+  const linePath = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+    .join(" ");
+
+  const areaPath = `${linePath} L ${points[points.length - 1].x} ${height} L ${points[0].x} ${height} Z`;
+
+  const area = document.createElementNS(svgNs, "path");
+  area.setAttribute("d", areaPath);
+  area.setAttribute("class", "result-loss-area");
+  resultLossTrend.appendChild(area);
+
+  const path = document.createElementNS(svgNs, "path");
+  path.setAttribute("d", linePath);
+  path.setAttribute("class", "result-loss-line");
+  resultLossTrend.appendChild(path);
+
+  points.forEach((point, index) => {
+    const dot = document.createElementNS(svgNs, "circle");
+    dot.setAttribute("cx", String(point.x));
+    dot.setAttribute("cy", String(point.y));
+    dot.setAttribute("r", index === points.length - 1 ? "5.5" : "3.5");
+    dot.setAttribute("class", "result-loss-dot");
+    dot.style.animationDelay = `${160 + index * 90}ms`;
+    resultLossTrend.appendChild(dot);
+  });
+
+  const lastPoint = points[points.length - 1];
+  const arrow = document.createElementNS(svgNs, "path");
+  arrow.setAttribute(
+    "d",
+    `M ${lastPoint.x + 4} ${lastPoint.y - 2} L ${lastPoint.x + 22} ${lastPoint.y + 6} L ${lastPoint.x + 10} ${lastPoint.y + 18} Z`,
+  );
+  arrow.setAttribute("class", "result-loss-arrow");
+  resultLossTrend.appendChild(arrow);
+
+  resultLossTrend.classList.add("active");
+}
+
+function spawnResultCoinBurst(amount = 0) {
+  if (!resultCoinBurst) return;
+
+  clearResultCoinBurst();
+  const intensity = Math.min(26, Math.max(12, Math.round(Math.abs(Number(amount) || 0) / 120)));
+
+  for (let i = 0; i < intensity; i += 1) {
+    const coin = document.createElement("span");
+    coin.className = "result-coin";
+    coin.style.setProperty("--coin-left", `${8 + Math.random() * 84}%`);
+    coin.style.setProperty("--coin-delay", `${Math.random() * 240}ms`);
+    coin.style.setProperty("--coin-drift", `${-44 + Math.random() * 88}px`);
+    coin.style.setProperty("--coin-rise", `${54 + Math.random() * 72}px`);
+    coin.style.setProperty("--coin-rotate", `${-220 + Math.random() * 440}deg`);
+    coin.style.width = `${26 + Math.random() * 14}px`;
+    coin.style.height = coin.style.width;
+    coin.style.fontSize = `${0.9 + Math.random() * 0.28}rem`;
+    resultCoinBurst.appendChild(coin);
+  }
+}
+
+function playCoinPayoutSound(amount = 0) {
+  const context = getGameAudioContext();
+  if (!context) return;
+
+  const startTime = context.currentTime + 0.02;
+  const intensity = Math.min(12, Math.max(5, Math.round(Math.abs(Number(amount) || 0) / 160)));
+
+  for (let i = 0; i < intensity; i += 1) {
+    const time = startTime + i * 0.065;
+    const sparkle = 980 + (i % 4) * 130 + Math.random() * 70;
+
+    scheduleTone({
+      context,
+      frequency: sparkle,
+      startTime: time,
+      duration: 0.085,
+      type: "triangle",
+      gain: 0.04,
+      endFrequency: sparkle * 0.9,
+    });
+
+    scheduleTone({
+      context,
+      frequency: sparkle * 1.48,
+      startTime: time + 0.012,
+      duration: 0.06,
+      type: "sine",
+      gain: 0.024,
+      endFrequency: sparkle * 1.25,
+    });
+
+    scheduleNoiseBurst({
+      context,
+      startTime: time,
+      duration: 0.035,
+      gain: 0.01,
+      filterType: "bandpass",
+      frequency: 2400 + (i % 3) * 220,
+      q: 3.4,
+    });
+  }
+}
+
 function syncBetInputs() {
   const maxBet = Math.max(0, Math.floor(Number(state.balance) || 0));
   const betInputs = [blackjackBetInput, coinBetInput, raceBetInput, slotsBetInput];
@@ -231,13 +915,16 @@ function hideGameResult() {
     resultOverlayTimer = null;
   }
 
+  clearResultCoinBurst();
+  clearResultLossTrend();
+
   resultOverlay.classList.remove("visible");
   window.setTimeout(() => {
     resultOverlay.classList.add("hidden");
   }, 220);
 }
 
-function showGameResult({ game, title, amount = 0, detail = "", variant = "push", duration = RESULT_SCREEN_DURATION }) {
+function showGameResult({ game, title, amount = 0, detail = "", variant = "push", duration = RESULT_SCREEN_DURATION, playSound = true }) {
   if (!resultOverlay) return;
 
   if (resultOverlayTimer) {
@@ -255,6 +942,26 @@ function showGameResult({ game, title, amount = 0, detail = "", variant = "push"
   window.requestAnimationFrame(() => {
     resultOverlay.classList.add("visible");
   });
+
+  if (variant === "win") {
+    spawnResultCoinBurst(amount);
+    clearResultLossTrend();
+    void unlockGameAudio().then(() => {
+      playCoinPayoutSound(amount);
+    });
+  } else if (variant === "loss") {
+    clearResultCoinBurst();
+    spawnResultLossTrend();
+  } else {
+    clearResultCoinBurst();
+    clearResultLossTrend();
+  }
+
+  if (playSound) {
+    void unlockGameAudio().then(() => {
+      playOverlayResultSound(variant, game);
+    });
+  }
 
   if (duration > 0) {
     resultOverlayTimer = window.setTimeout(() => {
@@ -669,7 +1376,14 @@ function createDeck(numberOfDecks = 6) {
 }
 
 function drawCard() {
-  return state.blackjack.deck.pop();
+  const card = state.blackjack.deck.pop();
+  if (!card) return null;
+
+  blackjackCardSequence += 1;
+  return {
+    ...card,
+    id: `bj-${blackjackCardSequence}`,
+  };
 }
 
 function normalizeSuit(suit) {
@@ -693,23 +1407,60 @@ function getCardValue(rank) {
   return Number(rank);
 }
 
-function calculateHandDetails(cards) {
-  let total = cards.reduce((sum, card) => sum + getCardValue(card.rank), 0);
-  let aces = cards.filter((card) => card.rank === "A").length;
+function getAceOverride(aceValues = {}, card, index = 0) {
+  if (!card || card.rank !== "A") return null;
 
-  while (total > 21 && aces > 0) {
+  const primaryKey = card.id || `index-${index}`;
+  const fallbackKey = `index-${index}`;
+  const rawValue = Object.prototype.hasOwnProperty.call(aceValues, primaryKey)
+    ? aceValues[primaryKey]
+    : aceValues[fallbackKey];
+  const value = Number(rawValue);
+
+  return value === 1 || value === 11 ? value : null;
+}
+
+function calculateHandDetails(cards, aceValues = {}, options = {}) {
+  const { autoAdjust = true } = options;
+  let total = 0;
+  let flexibleAces = 0;
+
+  cards.forEach((card, index) => {
+    if (card.rank === "A") {
+      const override = getAceOverride(aceValues, card, index);
+      if (override === 1 || override === 11) {
+        total += override;
+      } else {
+        total += 11;
+        flexibleAces += 1;
+      }
+      return;
+    }
+
+    total += getCardValue(card.rank);
+  });
+
+  while (autoAdjust && total > 21 && flexibleAces > 0) {
     total -= 10;
-    aces -= 1;
+    flexibleAces -= 1;
   }
 
   return {
     total,
-    isSoft: aces > 0 && total <= 21,
+    isSoft: flexibleAces > 0 && total <= 21,
   };
 }
 
-function calculateHand(cards) {
-  return calculateHandDetails(cards).total;
+function calculateHand(cards, aceValues = {}, options = {}) {
+  return calculateHandDetails(cards, aceValues, options).total;
+}
+
+function getHandDetails(hand, options = {}) {
+  return calculateHandDetails(hand.cards, hand.aceValues || {}, options);
+}
+
+function getHandScore(hand, options = {}) {
+  return getHandDetails(hand, options).total;
 }
 
 function shouldDealerDraw(cards) {
@@ -717,16 +1468,107 @@ function shouldDealerDraw(cards) {
   return details.total < 17 || (DEALER_HITS_SOFT_17 && details.total === 17 && details.isSoft);
 }
 
-function isBlackjack(cards) {
-  return cards.length === 2 && calculateHand(cards) === 21;
+function isBlackjack(cards, aceValues = {}) {
+  return cards.length === 2 && calculateHand(cards, aceValues) === 21;
 }
 
 function canSplitHand(hand) {
-  return hand.cards.length === 2 && getCardValue(hand.cards[0].rank) === getCardValue(hand.cards[1].rank);
+  return !!hand
+    && !hand.finished
+    && !hand.doubled
+    && hand.cards.length === 2
+    && state.blackjack.hands.length < MAX_BLACKJACK_HANDS
+    && hand.cards[0].rank === hand.cards[1].rank;
 }
 
 function getActiveHand() {
   return state.blackjack.hands[state.blackjack.activeHandIndex];
+}
+
+function isSplitAcesHand(hand) {
+  return !!hand?.splitAces;
+}
+
+function findPendingAceChoiceInHand(hand) {
+  if (!hand || hand.cards.length < 2) return null;
+
+  return hand.cards.find((card, index) => {
+    if (card.rank !== "A") return false;
+    if (getAceOverride(hand.aceValues || {}, card, index)) return false;
+
+    const asOne = calculateHand(hand.cards, {
+      ...(hand.aceValues || {}),
+      [card.id || `index-${index}`]: 1,
+    });
+    const asEleven = calculateHand(hand.cards, {
+      ...(hand.aceValues || {}),
+      [card.id || `index-${index}`]: 11,
+    });
+
+    return asOne !== asEleven;
+  }) || null;
+}
+
+function promptBlackjackAceChoice(handIndex, aceCard) {
+  const hand = state.blackjack.hands[handIndex];
+  const aceKey = aceCard.id || `index-${hand.cards.indexOf(aceCard)}`;
+  const asOne = calculateHand(hand.cards, {
+    ...(hand.aceValues || {}),
+    [aceKey]: 1,
+  });
+  const asEleven = calculateHand(hand.cards, {
+    ...(hand.aceValues || {}),
+    [aceKey]: 11,
+  });
+
+  return new Promise((resolve) => {
+    state.blackjack.aceChoice = {
+      handIndex,
+      cardId: aceKey,
+      resolve,
+    };
+
+    aceChoiceText.textContent = `Hand ${handIndex + 1}: Du hast ein Ass gezogen. Soll es als 11 oder 1 zählen?`;
+    aceChoiceTotals.textContent = `Als 11 wärst du bei ${asEleven} Punkten. Als 1 wärst du bei ${asOne} Punkten.`;
+    if (blackjackAceOverlayTimer) {
+      window.clearTimeout(blackjackAceOverlayTimer);
+      blackjackAceOverlayTimer = null;
+    }
+    blackjackAceOverlay?.classList.remove("hidden");
+    window.requestAnimationFrame(() => {
+      blackjackAceOverlay?.classList.add("visible");
+    });
+    renderBlackjack();
+  });
+}
+
+function cancelBlackjackAceChoice(defaultValue = 1) {
+  const pendingChoice = state.blackjack.aceChoice;
+  if (!pendingChoice) return;
+
+  state.blackjack.aceChoice = null;
+  hideBlackjackAceChoice();
+  pendingChoice.resolve(defaultValue);
+}
+
+async function resolvePendingAceChoicesForHand(handIndex) {
+  const hand = state.blackjack.hands[handIndex];
+  if (!hand) return;
+
+  while (true) {
+    const pendingAce = findPendingAceChoiceInHand(hand);
+    if (!pendingAce) break;
+
+    state.blackjack.busy = true;
+    setStatus("#blackjackStatus", "Ass wählen");
+    renderBlackjack();
+    const chosenValue = await promptBlackjackAceChoice(handIndex, pendingAce);
+    hand.aceValues = {
+      ...(hand.aceValues || {}),
+      [pendingAce.id || `index-${hand.cards.indexOf(pendingAce)}`]: chosenValue,
+    };
+    renderBlackjack();
+  }
 }
 
 function createCardElement(card, hidden = false) {
@@ -811,14 +1653,14 @@ function renderBlackjackHandsView() {
 
   if (state.blackjack.hands.length === 0) {
     scoreEl.textContent = "Punkte: 0";
-    infoEl.textContent = "Blackjack zahlt 3:2. Dealer steht auf Soft 17. Double nur mit den ersten zwei Karten.";
+    infoEl.textContent = "Blackjack zahlt 3:2. Split bis 4 Hände, Double mit den ersten zwei Karten, geteilte Asse bekommen eine Karte.";
     return;
   }
 
   if (state.blackjack.hands.length === 1) {
     const hand = state.blackjack.hands[0];
     hand.cards.forEach((card) => container.appendChild(createCardElement(card)));
-    scoreEl.textContent = `Punkte: ${calculateHand(hand.cards)}`;
+    scoreEl.textContent = `Punkte: ${getHandScore(hand)}`;
   } else {
     state.blackjack.hands.forEach((hand, index) => {
       const handWrap = document.createElement("div");
@@ -826,7 +1668,7 @@ function renderBlackjackHandsView() {
 
       const label = document.createElement("p");
       label.className = "mini-label";
-      label.textContent = `Hand ${index + 1} - ${calculateHand(hand.cards)} Punkte`;
+      label.textContent = `Hand ${index + 1} - ${getHandScore(hand)} Punkte`;
       handWrap.appendChild(label);
 
       const cardsWrap = document.createElement("div");
@@ -840,12 +1682,17 @@ function renderBlackjackHandsView() {
   }
 
   if (!state.blackjack.active) {
-    infoEl.textContent = "Blackjack zahlt 3:2. Dealer steht auf Soft 17. Double nur mit den ersten zwei Karten.";
+    infoEl.textContent = "Blackjack zahlt 3:2. Split bis 4 Hände, Double mit den ersten zwei Karten, geteilte Asse bekommen eine Karte.";
     return;
   }
 
   const activeHand = getActiveHand();
-  const splitText = canSplitHand(activeHand) && !state.blackjack.splitUsed ? ", Split" : "";
+  const splitText = canSplitHand(activeHand) ? ", Split" : "";
+
+  if (state.blackjack.aceChoice) {
+    infoEl.textContent = `Hand ${state.blackjack.aceChoice.handIndex + 1}: Wähle im Menü, ob das Ass als 11 oder 1 zählt.`;
+    return;
+  }
 
   if (state.blackjack.phase === "dealing") {
     infoEl.textContent = "Die Startkarten werden gerade wie am Tisch ausgegeben.";
@@ -854,6 +1701,11 @@ function renderBlackjackHandsView() {
 
   if (state.blackjack.phase === "dealer") {
     infoEl.textContent = "Dealer deckt auf und spielt seine Hand aus.";
+    return;
+  }
+
+  if (isSplitAcesHand(activeHand)) {
+    infoEl.textContent = `Hand ${state.blackjack.activeHandIndex + 1}: Geteilte Asse bekommen nur eine Karte und stehen danach.`;
     return;
   }
 
@@ -870,14 +1722,14 @@ function renderPlayerHands() {
 
   if (state.blackjack.hands.length === 0) {
     scoreEl.textContent = "Punkte: 0";
-    infoEl.textContent = "Natürliches Blackjack zahlt 3:2. Split und Double Down aktiv.";
+    infoEl.textContent = "Blackjack zahlt 3:2. Split bis 4 Hände, Double mit den ersten zwei Karten, geteilte Asse bekommen eine Karte.";
     return;
   }
 
   if (state.blackjack.hands.length === 1) {
     const hand = state.blackjack.hands[0];
     hand.cards.forEach((card) => container.appendChild(createCardElement(card)));
-    scoreEl.textContent = `Punkte: ${calculateHand(hand.cards)}`;
+    scoreEl.textContent = `Punkte: ${getHandScore(hand)}`;
   } else {
     state.blackjack.hands.forEach((hand, index) => {
       const handWrap = document.createElement("div");
@@ -885,7 +1737,7 @@ function renderPlayerHands() {
 
       const label = document.createElement("p");
       label.className = "mini-label";
-      label.textContent = `Hand ${index + 1} - ${calculateHand(hand.cards)} Punkte`;
+      label.textContent = `Hand ${index + 1} - ${getHandScore(hand)} Punkte`;
       handWrap.appendChild(label);
 
       const cardsWrap = document.createElement("div");
@@ -899,12 +1751,20 @@ function renderPlayerHands() {
   }
 
   if (!state.blackjack.active) {
-    infoEl.textContent = "Natürliches Blackjack zahlt 3:2. Split und Double Down aktiv.";
+    infoEl.textContent = "Blackjack zahlt 3:2. Split bis 4 Hände, Double mit den ersten zwei Karten, geteilte Asse bekommen eine Karte.";
     return;
   }
 
   const activeHand = getActiveHand();
-  const splitText = canSplitHand(activeHand) && !state.blackjack.splitUsed ? ", Split" : "";
+  const splitText = canSplitHand(activeHand) ? ", Split" : "";
+  if (state.blackjack.aceChoice) {
+    infoEl.textContent = `Hand ${state.blackjack.aceChoice.handIndex + 1}: Wähle im Menü, ob das Ass als 11 oder 1 zählt.`;
+    return;
+  }
+  if (isSplitAcesHand(activeHand)) {
+    infoEl.textContent = `Hand ${state.blackjack.activeHandIndex + 1}: Geteilte Asse bekommen nur eine Karte und stehen danach.`;
+    return;
+  }
   infoEl.textContent = state.blackjack.busy
     ? "Dealer spielt gerade seinen Zug aus."
     : `Hand ${state.blackjack.activeHandIndex + 1}: Du kannst mehrfach Hit spielen, dann Stand, Double${splitText}.`;
@@ -916,6 +1776,7 @@ function renderBlackjack() {
 }
 
 function resetBlackjackBoard() {
+  cancelBlackjackAceChoice(1);
   state.blackjack.dealer = [];
   state.blackjack.hands = [];
   state.blackjack.active = false;
@@ -924,6 +1785,8 @@ function resetBlackjackBoard() {
   state.blackjack.activeHandIndex = 0;
   state.blackjack.dealerRevealed = false;
   state.blackjack.splitUsed = false;
+  state.blackjack.aceChoice = null;
+  hideBlackjackAceChoice();
   setBetLocked(blackjackBetInput, false);
   renderBlackjack();
 }
@@ -975,7 +1838,7 @@ async function settleBlackjackRound() {
   const currentUser = getCurrentUser();
 
   for (const [index, hand] of state.blackjack.hands.entries()) {
-    const score = calculateHand(hand.cards);
+    const score = getHandScore(hand);
     const label = `Hand ${index + 1}`;
 
     if (score > 21) {
@@ -984,14 +1847,14 @@ async function settleBlackjackRound() {
       continue;
     }
 
-    if (hand.naturalBlackjack && !dealerHasBlackjack) {
+    if (hand.naturalBlackjack && !hand.wasSplit && !dealerHasBlackjack) {
       await adjustBalance(hand.bet * 2.5, currentUser);
       results.push(`${label} hat Blackjack`);
       totalNet += hand.bet * 1.5;
       continue;
     }
 
-    if (dealerHasBlackjack && !hand.naturalBlackjack) {
+    if (dealerHasBlackjack && !(hand.naturalBlackjack && !hand.wasSplit)) {
       results.push(`${label} verliert gegen Dealer-Blackjack`);
       totalNet -= hand.bet;
       continue;
@@ -1042,8 +1905,28 @@ async function moveToNextHandOrDealer() {
 
   if (nextIndex !== -1) {
     state.blackjack.activeHandIndex = nextIndex;
-    state.blackjack.busy = false;
     state.blackjack.phase = "player";
+    renderBlackjack();
+    await resolvePendingAceChoicesForHand(nextIndex);
+
+    const nextHand = getActiveHand();
+    if (isSplitAcesHand(nextHand)) {
+      nextHand.finished = true;
+      setStatus("#blackjackStatus", `Hand ${nextIndex + 1} steht nach Split-Ass`);
+      renderBlackjack();
+      await wait(320);
+      return moveToNextHandOrDealer();
+    }
+
+    if (getHandScore(nextHand) >= 21) {
+      nextHand.finished = true;
+      setStatus("#blackjackStatus", `Hand ${nextIndex + 1}`);
+      renderBlackjack();
+      await wait(320);
+      return moveToNextHandOrDealer();
+    }
+
+    state.blackjack.busy = false;
     setStatus("#blackjackStatus", `Hand ${nextIndex + 1}`);
     renderBlackjack();
     return;
@@ -1070,6 +1953,9 @@ async function startBlackjackRound(bet) {
       finished: false,
       naturalBlackjack: false,
       doubled: false,
+      aceValues: {},
+      wasSplit: false,
+      splitAces: false,
     },
   ];
   state.blackjack.active = true;
@@ -1082,7 +1968,8 @@ async function startBlackjackRound(bet) {
   hideGameResult();
 
   await dealOpeningBlackjackCards();
-  state.blackjack.hands[0].naturalBlackjack = isBlackjack(state.blackjack.hands[0].cards);
+  await resolvePendingAceChoicesForHand(0);
+  state.blackjack.hands[0].naturalBlackjack = isBlackjack(state.blackjack.hands[0].cards, state.blackjack.hands[0].aceValues);
   state.blackjack.busy = false;
   state.blackjack.phase = "player";
   renderBlackjack();
@@ -1113,12 +2000,17 @@ document.querySelector("#hitBlackjack").addEventListener("click", async () => {
   if (!state.blackjack.active || state.blackjack.busy) return;
 
   const hand = getActiveHand();
+  if (isSplitAcesHand(hand)) {
+    setStatus("#blackjackStatus", "Geteilte Asse stehen nach einer Karte");
+    return;
+  }
   state.blackjack.busy = true;
   hand.cards.push(drawCard());
   renderBlackjack();
   await wait(320);
+  await resolvePendingAceChoicesForHand(state.blackjack.activeHandIndex);
 
-  if (calculateHand(hand.cards) >= 21) {
+  if (getHandScore(hand) >= 21) {
     hand.finished = true;
     await moveToNextHandOrDealer();
     return;
@@ -1142,6 +2034,10 @@ document.querySelector("#doubleBlackjack").addEventListener("click", async () =>
   if (!state.blackjack.active || state.blackjack.busy) return;
 
   const hand = getActiveHand();
+  if (isSplitAcesHand(hand)) {
+    setStatus("#blackjackStatus", "Double auf geteilten Assen nicht möglich");
+    return;
+  }
   if (hand.cards.length !== 2 || hand.doubled || !canAfford(hand.bet)) {
     setStatus("#blackjackStatus", "Double nicht möglich");
     return;
@@ -1156,6 +2052,7 @@ document.querySelector("#doubleBlackjack").addEventListener("click", async () =>
   hand.doubled = true;
   state.blackjack.busy = true;
   hand.cards.push(drawCard());
+  await resolvePendingAceChoicesForHand(state.blackjack.activeHandIndex);
   hand.finished = true;
   renderBlackjack();
   await wait(320);
@@ -1168,7 +2065,7 @@ document.querySelector("#splitBlackjack").addEventListener("click", async () => 
   if (!state.blackjack.active || state.blackjack.busy) return;
 
   const hand = getActiveHand();
-  if (state.blackjack.splitUsed || !canSplitHand(hand) || !canAfford(hand.bet)) {
+  if (!canSplitHand(hand) || !canAfford(hand.bet)) {
     setStatus("#blackjackStatus", "Split nicht möglich");
     return;
   }
@@ -1179,8 +2076,15 @@ document.querySelector("#splitBlackjack").addEventListener("click", async () => 
     return;
   }
   const movedCard = hand.cards.pop();
+  const movedAceValue = movedCard?.rank === "A" ? getAceOverride(hand.aceValues || {}, movedCard, hand.cards.length) : null;
+  if (movedCard?.id && hand.aceValues && Object.prototype.hasOwnProperty.call(hand.aceValues, movedCard.id)) {
+    delete hand.aceValues[movedCard.id];
+  }
+  const isAceSplit = hand.cards[0]?.rank === "A" && movedCard?.rank === "A";
   hand.cards.push(drawCard());
   hand.naturalBlackjack = false;
+  hand.wasSplit = true;
+  hand.splitAces = isAceSplit;
 
   const newHand = {
     cards: [movedCard, drawCard()],
@@ -1188,15 +2092,38 @@ document.querySelector("#splitBlackjack").addEventListener("click", async () => 
     finished: false,
     naturalBlackjack: false,
     doubled: false,
+    aceValues: movedAceValue ? { [movedCard.id]: movedAceValue } : {},
+    wasSplit: true,
+    splitAces: isAceSplit,
   };
 
   state.blackjack.hands.splice(state.blackjack.activeHandIndex + 1, 0, newHand);
-  state.blackjack.splitUsed = true;
   state.blackjack.busy = true;
   renderBlackjack();
   await wait(320);
+  await resolvePendingAceChoicesForHand(state.blackjack.activeHandIndex);
+  if (isAceSplit) {
+    await resolvePendingAceChoicesForHand(state.blackjack.activeHandIndex + 1);
+    hand.finished = true;
+    newHand.finished = true;
+    setStatus("#blackjackStatus", "Geteilte Asse bekommen je eine Karte");
+    renderBlackjack();
+    await wait(320);
+    await moveToNextHandOrDealer();
+    return;
+  }
+
+  if (getHandScore(hand) >= 21) {
+    hand.finished = true;
+    setStatus("#blackjackStatus", `Hand ${state.blackjack.activeHandIndex + 1}`);
+    renderBlackjack();
+    await wait(320);
+    await moveToNextHandOrDealer();
+    return;
+  }
+
   state.blackjack.busy = false;
-  setStatus("#blackjackStatus", "Split aktiv");
+  setStatus("#blackjackStatus", `Hand ${state.blackjack.activeHandIndex + 1} nach Split`);
 });
 
 document.querySelectorAll(".choice-button").forEach((button) => {
@@ -1396,9 +2323,11 @@ document.querySelector("#spinSlots").addEventListener("click", async () => {
     return;
   }
   setStatus("#slotsStatus", "Spinning");
+  await unlockGameAudio();
   const finalSymbols = generateSlotOutcome();
   const sequences = finalSymbols.map((symbol, index) => buildReelSequence(symbol, 20 + index * 6));
   const reelDurations = sequences.map((_, index) => 2200 + index * 850);
+  playSlotSpinSound(reelDurations.map((duration) => duration / 1000));
 
   slotReels.forEach((reel, index) => {
     renderReel(reel, sequences[index]);
@@ -1428,6 +2357,7 @@ document.querySelector("#spinSlots").addEventListener("click", async () => {
     reel.classList.add("settling");
     reel.style.transition = "transform 220ms ease-out, filter 220ms ease-out";
     reel.style.transform = `translateY(-${offset}px)`;
+    playSlotStopSound(i);
     await wait(250);
   }
 

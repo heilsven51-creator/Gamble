@@ -357,7 +357,22 @@
       <h3 id="resultTitle">Runde beendet</h3>
       <p id="resultAmount" class="result-amount">0 Coins</p>
       <p id="resultDetail" class="result-detail">Die Auswertung erscheint hier.</p>
+      <div id="resultCoinBurst" class="result-coin-burst" aria-hidden="true"></div>
+      <svg id="resultLossTrend" class="result-loss-trend" viewBox="0 0 320 120" preserveAspectRatio="none" aria-hidden="true"></svg>
       <button class="button primary" id="closeGameResult">Weiter</button>
+    </div>
+  </div>
+
+  <div id="blackjackAceOverlay" class="ace-choice-overlay hidden" aria-live="assertive">
+    <div class="ace-choice-dialog">
+      <p class="panel-label">Blackjack</p>
+      <h3>Ass werten</h3>
+      <p id="aceChoiceText" class="result-detail">Wie soll dein Ass in dieser Hand zählen?</p>
+      <p id="aceChoiceTotals" class="ace-choice-totals">Wähle zwischen 11 oder 1.</p>
+      <div class="actions ace-choice-actions">
+        <button class="button secondary" id="aceAsOne">Als 1 zählen</button>
+        <button class="button primary" id="aceAsEleven">Als 11 zählen</button>
+      </div>
     </div>
   </div>
 

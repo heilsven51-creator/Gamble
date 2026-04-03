@@ -451,8 +451,15 @@ h3 {
     linear-gradient(180deg, rgba(12, 30, 52, 0.98), rgba(6, 14, 25, 0.98));
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
   text-align: center;
+  position: relative;
+  overflow: hidden;
   transform: translateY(12px) scale(0.98);
   transition: transform 220ms ease, border-color 220ms ease;
+}
+
+.result-screen > * {
+  position: relative;
+  z-index: 2;
 }
 
 .result-overlay.visible .result-screen {
@@ -496,10 +503,196 @@ h3 {
   color: var(--gold-strong);
 }
 
+.ace-choice-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 94;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 10, 19, 0.72);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
+.ace-choice-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ace-choice-dialog {
+  width: min(440px, 100%);
+  padding: 26px;
+  border-radius: 26px;
+  border: 1px solid rgba(240, 193, 90, 0.28);
+  background:
+    radial-gradient(circle at top, rgba(240, 193, 90, 0.16), transparent 46%),
+    linear-gradient(180deg, rgba(17, 29, 49, 0.96), rgba(8, 15, 28, 0.96));
+  box-shadow:
+    0 30px 60px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  transform: translateY(16px) scale(0.98);
+  transition: transform 180ms ease;
+}
+
+.ace-choice-overlay.visible .ace-choice-dialog {
+  transform: translateY(0) scale(1);
+}
+
+.ace-choice-totals {
+  margin: 0 0 18px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.ace-choice-actions {
+  margin-top: 8px;
+}
+
 .result-detail {
   margin: 0 0 18px;
   color: var(--muted);
   line-height: 1.55;
+}
+
+.result-coin-burst {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 16px;
+  top: 56%;
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.result-loss-trend {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 16px;
+  top: 56%;
+  z-index: 1;
+  pointer-events: none;
+  overflow: visible;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.result-loss-trend.active {
+  opacity: 1;
+}
+
+.result-loss-grid-line {
+  stroke: rgba(255, 255, 255, 0.08);
+  stroke-width: 1;
+  stroke-dasharray: 4 5;
+}
+
+.result-loss-area {
+  fill: url(#resultLossFill);
+  opacity: 0.9;
+}
+
+.result-loss-line {
+  fill: none;
+  stroke: #ff5d52;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 14px rgba(255, 93, 82, 0.22));
+  stroke-dasharray: 360;
+  stroke-dashoffset: 360;
+  animation: resultLossDraw 950ms cubic-bezier(0.18, 0.72, 0.2, 1) forwards;
+}
+
+.result-loss-dot {
+  fill: #ffb0a8;
+  stroke: rgba(255, 93, 82, 0.45);
+  stroke-width: 2;
+  opacity: 0;
+  animation: resultLossDot 220ms ease forwards;
+}
+
+.result-loss-arrow {
+  fill: #ff5d52;
+  filter: drop-shadow(0 0 14px rgba(255, 93, 82, 0.18));
+  opacity: 0;
+  animation: resultLossArrow 240ms ease forwards;
+  animation-delay: 700ms;
+}
+
+.result-coin {
+  position: absolute;
+  left: var(--coin-left, 50%);
+  bottom: -24px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 28%, #fff7d6, #f5c85d 52%, #b37717 100%);
+  color: #5b3905;
+  font-size: 1rem;
+  font-weight: 800;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 10px 18px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  transform: translate3d(0, 0, 0) rotate(0deg) scale(0.88);
+  animation: resultCoinRise 1080ms cubic-bezier(0.12, 0.74, 0.18, 1) forwards;
+  animation-delay: var(--coin-delay, 0ms);
+}
+
+.result-coin::before {
+  content: "C";
+  transform: translateY(-1px);
+}
+
+@keyframes resultCoinRise {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 16px, 0) rotate(0deg) scale(0.82);
+  }
+  8% {
+    opacity: 1;
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform:
+      translate3d(var(--coin-drift, 0px), calc(-1 * var(--coin-rise, 88px)), 0)
+      rotate(var(--coin-rotate, 0deg))
+      scale(1.02);
+  }
+}
+
+@keyframes resultLossDraw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes resultLossDot {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes resultLossArrow {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .menu-button {
