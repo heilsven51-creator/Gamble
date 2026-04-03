@@ -270,6 +270,75 @@ async function liveAdjustBalance(amount, user = liveState.profile) {
   return true;
 }
 
+function ensureLiveAdminAccess() {
+  if (!state.adminUnlocked) {
+    adminStatus.textContent = "Admin-Login nÃ¶tig";
+    return false;
+  }
+
+  if (!liveState.profile) {
+    adminStatus.textContent = "Bitte zuerst einloggen";
+    return false;
+  }
+
+  if (!liveState.profile.is_admin) {
+    adminStatus.textContent = "Dein Account braucht is_admin = true in Supabase";
+    return false;
+  }
+
+  return true;
+}
+
+async function liveAdjustOtherPlayerBalance(playerId, amount) {
+  const normalizedPlayerId = playerId.trim().toUpperCase();
+  if (!ensureLiveAdminAccess()) return false;
+
+  if (!normalizedPlayerId) {
+    adminStatus.textContent = "Spieler-ID fehlt";
+    return false;
+  }
+
+  if (!Number.isFinite(amount)) {
+    adminStatus.textContent = "UngÃ¼ltiger Coin-Wert";
+    return false;
+  }
+
+  const { data: targetProfile, error: targetError } = await liveClient
+    .from("profiles")
+    .select("id, username, player_id, coins")
+    .eq("player_id", normalizedPlayerId)
+    .maybeSingle();
+
+  if (targetError) {
+    adminStatus.textContent = targetError.message || "Spieler konnte nicht geladen werden";
+    return false;
+  }
+
+  if (!targetProfile) {
+    adminStatus.textContent = "ID nicht gefunden";
+    return false;
+  }
+
+  const currentCoins = Number(targetProfile.coins ?? 0);
+  const nextCoins = Math.max(0, currentCoins + amount);
+
+  const { error: updateError } = await liveClient
+    .from("profiles")
+    .update({ coins: nextCoins })
+    .eq("id", targetProfile.id);
+
+  if (updateError) {
+    adminStatus.textContent = updateError.message || "Coins konnten nicht aktualisiert werden";
+    return false;
+  }
+
+  await liveSync();
+  adminStatus.textContent = amount >= 0
+    ? `${targetProfile.username} bekam ${Math.abs(amount)} Coins`
+    : `${targetProfile.username} verlor ${Math.abs(amount)} Coins`;
+  return true;
+}
+
 async function liveRequireUser(statusSelector) {
   if (liveState.profile) return liveState.profile;
   if (statusSelector) setStatus(statusSelector, "Login nötig");
@@ -583,44 +652,23 @@ function installLiveHandlers() {
   replaceNode("#adminGiveOther").addEventListener("click", async () => {
     const amount = Number(adminTargetCoinsInput.value);
     const playerId = adminTargetPlayerIdInput.value.trim();
-    if (!state.adminUnlocked || !Number.isFinite(amount) || amount < 0) return;
-
-    const target = liveState.profiles.find((profile) => profile.player_id === playerId);
-    if (!target) {
-      adminStatus.textContent = "ID nicht gefunden";
+    if (!Number.isFinite(amount) || amount < 0) {
+      adminStatus.textContent = "UngÃ¼ltiger Coin-Wert";
       return;
     }
 
-    const { error } = await liveClient.from("profiles").update({ coins: target.coins + amount }).eq("id", target.id);
-    if (error) {
-      adminStatus.textContent = error.message;
-      return;
-    }
-
-    await liveSync();
+    await liveAdjustOtherPlayerBalance(playerId, amount);
   });
 
   replaceNode("#adminTakeOther").addEventListener("click", async () => {
     const amount = Number(adminTargetCoinsInput.value);
     const playerId = adminTargetPlayerIdInput.value.trim();
-    if (!state.adminUnlocked || !Number.isFinite(amount) || amount < 0) return;
-
-    const target = liveState.profiles.find((profile) => profile.player_id === playerId);
-    if (!target) {
-      adminStatus.textContent = "ID nicht gefunden";
+    if (!Number.isFinite(amount) || amount < 0) {
+      adminStatus.textContent = "UngÃ¼ltiger Coin-Wert";
       return;
     }
 
-    const { error } = await liveClient
-      .from("profiles")
-      .update({ coins: Math.max(0, target.coins - amount) })
-      .eq("id", target.id);
-    if (error) {
-      adminStatus.textContent = error.message;
-      return;
-    }
-
-    await liveSync();
+    await liveAdjustOtherPlayerBalance(playerId, -amount);
   });
 }
 
