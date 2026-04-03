@@ -1472,13 +1472,26 @@ function isBlackjack(cards, aceValues = {}) {
   return cards.length === 2 && calculateHand(cards, aceValues) === 21;
 }
 
+function getSplitValue(card) {
+  const rawValue = getCardValue(card.rank);
+  return rawValue === 11 ? 11 : rawValue;
+}
+
+function getBlackjackProfit(bet) {
+  return Math.round((Number(bet) || 0) * 1.5 * 100) / 100;
+}
+
+function getBlackjackPayout(bet) {
+  return Math.round(((Number(bet) || 0) + getBlackjackProfit(bet)) * 100) / 100;
+}
+
 function canSplitHand(hand) {
   return !!hand
     && !hand.finished
     && !hand.doubled
     && hand.cards.length === 2
     && state.blackjack.hands.length < MAX_BLACKJACK_HANDS
-    && hand.cards[0].rank === hand.cards[1].rank;
+    && getSplitValue(hand.cards[0]) === getSplitValue(hand.cards[1]);
 }
 
 function getActiveHand() {
@@ -1848,9 +1861,11 @@ async function settleBlackjackRound() {
     }
 
     if (hand.naturalBlackjack && !hand.wasSplit && !dealerHasBlackjack) {
-      await adjustBalance(hand.bet * 2.5, currentUser);
-      results.push(`${label} hat Blackjack`);
-      totalNet += hand.bet * 1.5;
+      const blackjackProfit = getBlackjackProfit(hand.bet);
+      const blackjackPayout = getBlackjackPayout(hand.bet);
+      await adjustBalance(blackjackPayout, currentUser);
+      results.push(`${label} hat Blackjack (3:2: ${blackjackProfit} Gewinn, ${blackjackPayout} Auszahlung)`);
+      totalNet += blackjackProfit;
       continue;
     }
 
