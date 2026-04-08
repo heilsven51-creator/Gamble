@@ -694,6 +694,13 @@ function renderAdminAccountsLive() {
     return;
   }
 
+   if (!liveState.profile?.is_admin) {
+    const item = document.createElement("li");
+    item.textContent = "Dein Account braucht is_admin = true in Supabase.";
+    adminAccountsList.appendChild(item);
+    return;
+  }
+
   if (liveState.profiles.length === 0) {
     const item = document.createElement("li");
     item.textContent = "Noch keine Accounts vorhanden.";
@@ -993,13 +1000,13 @@ function installLiveHandlers() {
 
   replaceNode("#adminGiveSelf").addEventListener("click", async () => {
     const amount = Number(adminSelfCoinsInput.value);
-    if (!state.adminUnlocked || !liveState.profile || !Number.isFinite(amount) || amount < 0) return;
+    if (!ensureLiveAdminAccess() || !Number.isFinite(amount) || amount < 0) return;
     await liveAdjustBalance(amount, liveState.profile);
   });
 
   replaceNode("#adminTakeSelf").addEventListener("click", async () => {
     const amount = Number(adminSelfCoinsInput.value);
-    if (!state.adminUnlocked || !liveState.profile || !Number.isFinite(amount) || amount < 0) return;
+    if (!ensureLiveAdminAccess() || !Number.isFinite(amount) || amount < 0) return;
     await liveAdjustBalance(-amount, liveState.profile);
   });
 
