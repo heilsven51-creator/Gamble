@@ -3189,7 +3189,14 @@ document.querySelector("#spinRoulette").addEventListener("click", async () => {
   rouletteLastNumber.innerHTML = buildRouletteLastNumberMarkup(winningNumber);
 
   if (outcome.won) {
-    await adjustBalance(outcome.payout, currentUser);
+    const paidOut = await adjustBalance(outcome.payout, currentUser);
+    if (!paidOut) {
+      setStatus("#rouletteStatus", "Fehler");
+      rouletteResult.textContent = "Die Auszahlung konnte nicht gespeichert werden.";
+      state.roulette.busy = false;
+      setBetLocked(rouletteBetInput, false);
+      return;
+    }
     setStatus("#rouletteStatus", "Gewonnen");
     showGameResult({
       game: "Roulette",

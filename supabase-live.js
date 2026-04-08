@@ -163,6 +163,7 @@ async function liveFetchProfiles() {
 async function liveFetchProfile() {
   const { data: authData } = await liveClient.auth.getUser();
   liveState.user = authData?.user || null;
+  state.appData.currentUserId = null;
 
   if (!liveState.user) {
     liveState.profile = null;
@@ -409,10 +410,18 @@ async function liveAdjustBalance(amount, user = liveState.profile) {
   const currentCoins = Number(currentProfile?.coins ?? 0);
   const nextCoins = Math.max(0, currentCoins + amount);
 
-  const { error } = await liveClient.from("profiles").update({ coins: nextCoins }).eq("id", profileId);
-  if (error) {
-    authMessage.textContent = error.message || "Coins konnten nicht aktualisiert werden.";
+  const { data: updatedProfile, error } = await liveClient
+    .from("profiles")
+    .update({ coins: nextCoins })
+    .eq("id", profileId)
+    .select("*")
+    .single();
+  if (error || !updatedProfile) {
+    authMessage.textContent = error?.message || "Coins konnten nicht aktualisiert werden.";
     return false;
+  }
+  if (liveState.profile && resolveProfileId(liveState.profile) === profileId) {
+    liveState.profile = mapProfile(updatedProfile, liveState.user);
   }
   await liveSync();
   return true;
@@ -470,20 +479,22 @@ async function liveAdjustOtherPlayerBalance(playerId, amount) {
   const currentCoins = Number(targetProfile.coins ?? 0);
   const nextCoins = Math.max(0, currentCoins + amount);
 
-  const { error: updateError } = await liveClient
+  const { data: updatedProfile, error: updateError } = await liveClient
     .from("profiles")
     .update({ coins: nextCoins })
-    .eq("id", targetProfile.id);
+    .eq("id", targetProfile.id)
+    .select("id, username, player_id, coins")
+    .single();
 
-  if (updateError) {
-    adminStatus.textContent = updateError.message || "Coins konnten nicht aktualisiert werden";
+  if (updateError || !updatedProfile) {
+    adminStatus.textContent = updateError?.message || "Coins konnten nicht aktualisiert werden";
     return false;
   }
 
   await liveSync();
   adminStatus.textContent = amount >= 0
-    ? `${targetProfile.username} bekam ${Math.abs(amount)} Coins`
-    : `${targetProfile.username} verlor ${Math.abs(amount)} Coins`;
+    ? `${updatedProfile.username} bekam ${Math.abs(amount)} Coins`
+    : `${updatedProfile.username} verlor ${Math.abs(amount)} Coins`;
   return true;
 }
 
@@ -1001,13 +1012,19 @@ function installLiveHandlers() {
   replaceNode("#adminGiveSelf").addEventListener("click", async () => {
     const amount = Number(adminSelfCoinsInput.value);
     if (!ensureLiveAdminAccess() || !Number.isFinite(amount) || amount < 0) return;
-    await liveAdjustBalance(amount, liveState.profile);
+    const ok = await liveAdjustBalance(amount, liveState.profile);
+    if (ok) {
+      adminStatus.textContent = `Du bekamst ${Math.abs(amount)} Coins`;
+    }
   });
 
   replaceNode("#adminTakeSelf").addEventListener("click", async () => {
     const amount = Number(adminSelfCoinsInput.value);
     if (!ensureLiveAdminAccess() || !Number.isFinite(amount) || amount < 0) return;
-    await liveAdjustBalance(-amount, liveState.profile);
+    const ok = await liveAdjustBalance(-amount, liveState.profile);
+    if (ok) {
+      adminStatus.textContent = `Dir wurden ${Math.abs(amount)} Coins abgezogen`;
+    }
   });
 
   replaceNode("#adminSetLuckBoost").addEventListener("click", async () => {
@@ -1044,9 +1061,13 @@ function installLiveHandlers() {
 async function installLiveSupabase() {
   if (!window.SUPABASE_CONFIG?.url || !window.SUPABASE_CONFIG?.anonKey) return;
 
+  window.liveAdjustBalance = liveAdjustBalance;
+  window.liveRequireUser = liveRequireUser;
+  window.liveSync = liveSync;
   adjustBalance = liveAdjustBalance;
   requireUser = liveRequireUser;
   syncCurrentUser = liveSync;
+  state.appData.currentUserId = null;
 
   installLiveHandlers();
   await liveSync();
