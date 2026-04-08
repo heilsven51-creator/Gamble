@@ -1,6 +1,38 @@
+const supabaseSessionStorage = {
+  getItem(key) {
+    try {
+      return window.sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  setItem(key, value) {
+    try {
+      window.sessionStorage.setItem(key, value);
+    } catch {
+      // ignore storage write failures
+    }
+  },
+  removeItem(key) {
+    try {
+      window.sessionStorage.removeItem(key);
+    } catch {
+      // ignore storage removal failures
+    }
+  },
+};
+
 const liveClient = supabase.createClient(
   window.SUPABASE_CONFIG?.url || "",
   window.SUPABASE_CONFIG?.anonKey || "",
+  {
+    auth: {
+      storage: supabaseSessionStorage,
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  },
 );
 
 const liveState = {
@@ -21,10 +53,13 @@ function replaceNode(selector) {
 }
 
 function normalizeProfile(profile) {
+  const normalizedLuckBoost = clampLuckBoost(profile?.luck_boost ?? profile?.luckBoost ?? 1);
   return {
     ...profile,
     coins: Number(profile?.coins ?? 0),
     work_completed: Number(profile?.work_completed ?? 0),
+    luck_boost: normalizedLuckBoost,
+    luckBoost: normalizedLuckBoost,
   };
 }
 
@@ -44,6 +79,7 @@ function mapProfile(profile, authUser) {
     id: normalizedProfile.id || authUser?.id || null,
     playerId: normalizedProfile.player_id,
     email: authUser?.email || normalizedProfile.email || "-",
+    luckBoost: normalizedProfile.luck_boost,
   };
 }
 
@@ -230,10 +266,14 @@ function liveRenderProfile() {
   profileEmail.textContent = liveState.profile?.email || "-";
   profilePlayerId.textContent = liveState.profile?.playerId || "-";
   profileCoins.textContent = String(liveState.profile?.coins || 0);
+  profileLuckBoost.textContent = `x${getCurrentLuckBoost(liveState.profile)}`;
   changeUsernameInput.value = liveState.profile?.username || "";
   currentUserLabel.textContent = liveState.profile?.username || "Nicht eingeloggt";
   balanceEl.textContent = String(liveState.profile?.coins || 0);
   state.balance = liveState.profile?.coins || 0;
+  if (adminLuckBoostInput) {
+    adminLuckBoostInput.value = String(getCurrentLuckBoost(liveState.profile));
+  }
   if (typeof syncBetInputs === "function") {
     syncBetInputs();
   }
@@ -326,7 +366,6 @@ function liveRenderDaily() {
 
 function liveRenderAuth() {
   const loggedIn = !!liveState.profile;
-  logoutUserButton.classList.toggle("hidden", !loggedIn);
   document.querySelector("#loginUser").classList.toggle("hidden", loggedIn);
   document.querySelector("#registerUser")?.classList.toggle("hidden", loggedIn);
   document.querySelector("#loginView").classList.toggle("hidden", loggedIn || state.authView !== "login");
@@ -381,7 +420,7 @@ async function liveAdjustBalance(amount, user = liveState.profile) {
 
 function ensureLiveAdminAccess() {
   if (!state.adminUnlocked) {
-    adminStatus.textContent = "Admin-Login nÃ¶tig";
+    adminStatus.textContent = "Admin-Login nötig";
     return false;
   }
 
@@ -408,7 +447,7 @@ async function liveAdjustOtherPlayerBalance(playerId, amount) {
   }
 
   if (!Number.isFinite(amount)) {
-    adminStatus.textContent = "UngÃ¼ltiger Coin-Wert";
+    adminStatus.textContent = "Ungültiger Coin-Wert";
     return false;
   }
 
@@ -445,6 +484,69 @@ async function liveAdjustOtherPlayerBalance(playerId, amount) {
   adminStatus.textContent = amount >= 0
     ? `${targetProfile.username} bekam ${Math.abs(amount)} Coins`
     : `${targetProfile.username} verlor ${Math.abs(amount)} Coins`;
+  return true;
+}
+
+async function liveSetOwnLuckBoost(multiplier) {
+  if (!ensureLiveAdminAccess()) return false;
+
+  const normalizedMultiplier = clampLuckBoost(multiplier);
+  const { error } = await liveClient
+    .from("profiles")
+    .update({ luck_boost: normalizedMultiplier })
+    .eq("id", resolveProfileId());
+
+  if (error) {
+    adminStatus.textContent = error.message || "Luck Boost konnte nicht gesetzt werden";
+    return false;
+  }
+
+  await liveSync();
+  adminStatus.textContent = `Luck Boost x${normalizedMultiplier}`;
+  logActivity(`${liveState.profile.username} hat jetzt Luck Boost x${normalizedMultiplier}.`);
+  return true;
+}
+
+async function liveSetOtherLuckBoost(playerId, multiplier) {
+  const normalizedPlayerId = playerId.trim().toUpperCase();
+  if (!ensureLiveAdminAccess()) return false;
+
+  if (!normalizedPlayerId) {
+    adminStatus.textContent = "Spieler-ID fehlt";
+    return false;
+  }
+
+  const normalizedMultiplier = clampLuckBoost(multiplier);
+
+  const { data: targetProfile, error: targetError } = await liveClient
+    .from("profiles")
+    .select("id, username, player_id")
+    .eq("player_id", normalizedPlayerId)
+    .maybeSingle();
+
+  if (targetError) {
+    adminStatus.textContent = targetError.message || "Spieler konnte nicht geladen werden";
+    return false;
+  }
+
+  if (!targetProfile) {
+    adminStatus.textContent = "ID nicht gefunden";
+    return false;
+  }
+
+  const { error: updateError } = await liveClient
+    .from("profiles")
+    .update({ luck_boost: normalizedMultiplier })
+    .eq("id", targetProfile.id);
+
+  if (updateError) {
+    adminStatus.textContent = updateError.message || "Luck Boost konnte nicht gesetzt werden";
+    return false;
+  }
+
+  await liveSync();
+  adminStatus.textContent = `${targetProfile.username} hat jetzt Luck Boost x${normalizedMultiplier}`;
+  logActivity(`Admin hat ${targetProfile.username} den Luck Boost auf x${normalizedMultiplier} gesetzt.`);
   return true;
 }
 
@@ -700,14 +802,16 @@ function installLiveHandlers() {
     });
   }
 
-  const logoutButton = replaceNode("#logoutUser");
-  logoutButton.addEventListener("click", async () => {
-    if (liveState.profile) logActivity(`${liveState.profile.username} hat sich ausgeloggt.`);
-    await liveClient.auth.signOut();
-    state.adminUnlocked = false;
-    setAdminMode(false);
-    await liveSync();
-  });
+  const logoutButton = document.querySelector("#logoutUser");
+  if (logoutButton) {
+    replaceNode("#logoutUser").addEventListener("click", async () => {
+      if (liveState.profile) logActivity(`${liveState.profile.username} hat sich ausgeloggt.`);
+      await liveClient.auth.signOut();
+      state.adminUnlocked = false;
+      setAdminMode(false);
+      await liveSync();
+    });
+  }
 
   const renameButton = replaceNode("#changeUsernameButton");
   renameButton.addEventListener("click", async () => {
@@ -899,11 +1003,19 @@ function installLiveHandlers() {
     await liveAdjustBalance(-amount, liveState.profile);
   });
 
+  replaceNode("#adminSetLuckBoost").addEventListener("click", async () => {
+    await liveSetOwnLuckBoost(adminLuckBoostInput.value);
+  });
+
+  replaceNode("#adminSetOtherLuckBoost").addEventListener("click", async () => {
+    await liveSetOtherLuckBoost(adminTargetPlayerIdInput.value, adminTargetLuckBoostInput.value);
+  });
+
   replaceNode("#adminGiveOther").addEventListener("click", async () => {
     const amount = Number(adminTargetCoinsInput.value);
     const playerId = adminTargetPlayerIdInput.value.trim();
     if (!Number.isFinite(amount) || amount < 0) {
-      adminStatus.textContent = "UngÃ¼ltiger Coin-Wert";
+      adminStatus.textContent = "Ungültiger Coin-Wert";
       return;
     }
 
@@ -914,7 +1026,7 @@ function installLiveHandlers() {
     const amount = Number(adminTargetCoinsInput.value);
     const playerId = adminTargetPlayerIdInput.value.trim();
     if (!Number.isFinite(amount) || amount < 0) {
-      adminStatus.textContent = "UngÃ¼ltiger Coin-Wert";
+      adminStatus.textContent = "Ungültiger Coin-Wert";
       return;
     }
 
@@ -930,11 +1042,6 @@ async function installLiveSupabase() {
   syncCurrentUser = liveSync;
 
   installLiveHandlers();
-  await liveClient.auth.signOut();
-  liveState.user = null;
-  liveState.profile = null;
-  liveState.friends = [];
-  state.currentProfile = null;
   await liveSync();
 
   liveClient.auth.onAuthStateChange(async () => {

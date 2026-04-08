@@ -22,6 +22,13 @@ const state = {
   coinBusy: false,
   raceBusy: false,
   slotsBusy: false,
+  roulette: {
+    busy: false,
+    selection: null,
+    wheelRotation: 0,
+    ballRotation: 0,
+    lastNumber: null,
+  },
   appData: loadAppData(),
 };
 
@@ -50,6 +57,7 @@ const profileUsername = document.querySelector("#profileUsername");
 const profileEmail = document.querySelector("#profileEmail");
 const profilePlayerId = document.querySelector("#profilePlayerId");
 const profileCoins = document.querySelector("#profileCoins");
+const profileLuckBoost = document.querySelector("#profileLuckBoost");
 const changeUsernameInput = document.querySelector("#changeUsernameInput");
 const changeUsernameButton = document.querySelector("#changeUsernameButton");
 const friendsList = document.querySelector("#friendsList");
@@ -62,8 +70,10 @@ const adminStatus = document.querySelector("#adminStatus");
 const adminCodeInput = document.querySelector("#adminCode");
 const adminControls = document.querySelector("#adminControls");
 const adminSelfCoinsInput = document.querySelector("#adminSelfCoins");
+const adminLuckBoostInput = document.querySelector("#adminLuckBoost");
 const adminTargetPlayerIdInput = document.querySelector("#adminTargetPlayerId");
 const adminTargetCoinsInput = document.querySelector("#adminTargetCoins");
+const adminTargetLuckBoostInput = document.querySelector("#adminTargetLuckBoost");
 const adminAccountsList = document.querySelector("#adminAccountsList");
 const dailyStatusText = document.querySelector("#dailyStatusText");
 const workCounter = document.querySelector("#workCounter");
@@ -75,6 +85,14 @@ const blackjackBetInput = document.querySelector("#blackjackBet");
 const coinBetInput = document.querySelector("#coinBet");
 const raceBetInput = document.querySelector("#raceBet");
 const slotsBetInput = document.querySelector("#slotsBet");
+const rouletteBetInput = document.querySelector("#rouletteBet");
+const rouletteSelectionLabel = document.querySelector("#rouletteSelection");
+const rouletteNumbersGrid = document.querySelector("#rouletteNumbersGrid");
+const rouletteWheel = document.querySelector("#rouletteWheel");
+const rouletteWheelNumbers = document.querySelector("#rouletteWheelNumbers");
+const rouletteBallTrack = document.querySelector("#rouletteBallTrack");
+const rouletteResult = document.querySelector("#rouletteResult");
+const rouletteLastNumber = document.querySelector("#rouletteLastNumber");
 const resultOverlay = document.querySelector("#gameResultOverlay");
 const resultGameLabel = document.querySelector("#resultGameLabel");
 const resultTitle = document.querySelector("#resultTitle");
@@ -116,6 +134,9 @@ const slotPayoutMultipliers = {
   pair: 1.5,
 };
 const horseNames = ["Blaze", "Storm", "Nova", "Comet"];
+const rouletteSequence = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26];
+const rouletteRedNumbers = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
+const ROULETTE_POCKET_STEP = 360 / rouletteSequence.length;
 const WORK_LIMIT_PER_DAY = 10;
 const RESULT_SCREEN_DURATION = 3200;
 const COIN_FLIP_DURATION = 1400;
@@ -289,6 +310,7 @@ function loadAppData() {
         ? parsed.users.map((user) => ({
           ...user,
           friends: Array.isArray(user.friends) ? user.friends : [],
+          luckBoost: clampLuckBoost(user.luckBoost ?? user.luck_boost ?? 1),
         }))
         : [],
       currentUserId: parsed.currentUserId ?? null,
@@ -297,6 +319,12 @@ function loadAppData() {
   } catch {
     return { users: [], currentUserId: null, friendRequests: [] };
   }
+}
+
+function clampLuckBoost(value) {
+  const numericValue = Math.floor(Number(value));
+  if (!Number.isFinite(numericValue)) return 1;
+  return Math.min(100, Math.max(1, numericValue));
 }
 
 function saveAppData() {
@@ -1194,7 +1222,7 @@ function playCoinPayoutSound(amount = 0) {
 
 function syncBetInputs() {
   const maxBet = Math.max(0, Math.floor(Number(state.balance) || 0));
-  const betInputs = [blackjackBetInput, coinBetInput, raceBetInput, slotsBetInput];
+  const betInputs = [blackjackBetInput, coinBetInput, raceBetInput, slotsBetInput, rouletteBetInput];
 
   betInputs.forEach((input) => {
     if (!input) return;
@@ -1302,6 +1330,12 @@ function showGamePanel(target) {
   gamePanels.forEach((panel) => {
     panel.classList.toggle("active-game", panel.dataset.gamePanel === target);
   });
+
+  if (target === "roulette") {
+    window.requestAnimationFrame(() => {
+      renderRouletteWheel();
+    });
+  }
 }
 
 function showMenuPanel(target) {
@@ -1327,7 +1361,7 @@ function setAuthView(nextView) {
 
 function renderAuthState() {
   const currentUser = getCurrentUser();
-  logoutUserButton.classList.toggle("hidden", !currentUser);
+  logoutUserButton?.classList.toggle("hidden", !currentUser);
   document.querySelector("#loginUser").classList.toggle("hidden", !!currentUser);
   document.querySelector("#registerUser").classList.toggle("hidden", !!currentUser);
   authViews.login.classList.toggle("hidden", !!currentUser || state.authView !== "login");
@@ -1348,7 +1382,11 @@ function renderProfile() {
   profileEmail.textContent = currentUser ? currentUser.email : "-";
   profilePlayerId.textContent = currentUser ? currentUser.playerId : "-";
   profileCoins.textContent = currentUser ? String(currentUser.coins) : "0";
+  profileLuckBoost.textContent = `x${getCurrentLuckBoost(currentUser)}`;
   changeUsernameInput.value = currentUser ? currentUser.username : "";
+  if (adminLuckBoostInput) {
+    adminLuckBoostInput.value = String(getCurrentLuckBoost(currentUser));
+  }
 
   if (!currentUser) {
     renderFriendSections({});
@@ -1678,6 +1716,52 @@ function canAfford(bet) {
   return bet >= 1 && bet <= state.balance;
 }
 
+function getCurrentLuckBoost(user = getCurrentUser()) {
+  return clampLuckBoost(user?.luckBoost ?? user?.luck_boost ?? 1);
+}
+
+function getLuckProgress(user = getCurrentUser()) {
+  return (getCurrentLuckBoost(user) - 1) / 99;
+}
+
+function getRouletteNumbersForSelection(selection) {
+  if (!selection) return [];
+
+  const numericValue = Number(selection.value);
+  switch (selection.type) {
+    case "straight":
+      return [numericValue];
+    case "color":
+      return rouletteSequence.filter((number) => number !== 0 && getRouletteColor(number) === selection.value);
+    case "parity":
+      return rouletteSequence.filter((number) => number !== 0 && (selection.value === "even" ? number % 2 === 0 : number % 2 === 1));
+    case "range":
+      return rouletteSequence.filter((number) => number !== 0 && (selection.value === "low"
+        ? number >= 1 && number <= 18
+        : number >= 19 && number <= 36));
+    case "dozen":
+      return rouletteSequence.filter((number) => number !== 0 && (
+        (numericValue === 1 && number >= 1 && number <= 12)
+        || (numericValue === 2 && number >= 13 && number <= 24)
+        || (numericValue === 3 && number >= 25 && number <= 36)
+      ));
+    default:
+      return [];
+  }
+}
+
+function generateRouletteWinningNumber(selection, user = getCurrentUser()) {
+  const baseNumber = rouletteSequence[randomInt(0, rouletteSequence.length - 1)];
+  const winningNumbers = getRouletteNumbersForSelection(selection);
+  const luckChance = getLuckProgress(user) * 0.96;
+
+  if (!winningNumbers.length || Math.random() >= luckChance) {
+    return baseNumber;
+  }
+
+  return winningNumbers[randomInt(0, winningNumbers.length - 1)];
+}
+
 function formatSlotSymbol(symbol) {
   return slotSymbolMap[symbol]?.display || String(symbol);
 }
@@ -1699,14 +1783,18 @@ function buildReelSequence(finalSymbol, loops = 20) {
   return sequence;
 }
 
-function generateSlotOutcome() {
+function generateSlotOutcome(user = getCurrentUser()) {
   const result = [getRandomSlotSymbol(), getRandomSlotSymbol(), getRandomSlotSymbol()];
   const uniqueCount = new Set(result).size;
+  const luckProgress = getLuckProgress(user);
 
   // Hebt die Gewinnchance nur leicht an, indem manche Nieten zu einem Paar werden.
-  if (uniqueCount === 3 && Math.random() < 0.08) {
+  if (uniqueCount === 3 && Math.random() < (0.08 + luckProgress * 0.5)) {
     const sourceIndex = Math.random() < 0.5 ? 0 : 1;
     result[2] = result[sourceIndex];
+    if (Math.random() < (0.08 + luckProgress * 0.72)) {
+      result[1] = result[0];
+    }
   }
 
   return result;
@@ -1743,6 +1831,193 @@ function getSlotPayoutDetails(result, bet) {
     payout: 0,
     multiplier: 0,
     label: "Keine Kombination",
+  };
+}
+
+function normalizeAngle(angle) {
+  return ((Number(angle) || 0) % 360 + 360) % 360;
+}
+
+function getRouletteColor(number) {
+  if (number === 0) return "green";
+  return rouletteRedNumbers.has(number) ? "red" : "black";
+}
+
+function getRoulettePocketAngle(number) {
+  const index = rouletteSequence.indexOf(number);
+  if (index < 0) return 0;
+  return index * ROULETTE_POCKET_STEP + (ROULETTE_POCKET_STEP / 2);
+}
+
+function buildRouletteWheelGradient() {
+  const segments = rouletteSequence.map((number, index) => {
+    const start = (index * ROULETTE_POCKET_STEP).toFixed(3);
+    const end = ((index + 1) * ROULETTE_POCKET_STEP).toFixed(3);
+    const color = getRouletteColor(number) === "red"
+      ? "#8b1f27"
+      : getRouletteColor(number) === "black"
+        ? "#171b25"
+        : "#237644";
+    return `${color} ${start}deg ${end}deg`;
+  });
+
+  return `
+    radial-gradient(circle at center, rgba(7, 13, 23, 0.1) 0 32%, transparent 33%),
+    conic-gradient(${segments.join(", ")})
+  `;
+}
+
+function buildRouletteLastNumberMarkup(number) {
+  const color = getRouletteColor(number);
+  return `Letzte Zahl: <span class="roulette-number-pill ${color}">${number}</span>`;
+}
+
+function setRouletteVisualState(wheelAngle = state.roulette.wheelRotation, ballAngle = state.roulette.ballRotation, immediate = false) {
+  if (rouletteWheel) {
+    if (immediate) {
+      rouletteWheel.style.transition = "none";
+    }
+    rouletteWheel.style.transform = `rotate(${wheelAngle}deg)`;
+  }
+
+  if (rouletteBallTrack) {
+    if (immediate) {
+      rouletteBallTrack.style.transition = "none";
+    }
+    rouletteBallTrack.style.transform = `rotate(${ballAngle}deg)`;
+  }
+}
+
+function renderRouletteWheel() {
+  if (!rouletteWheel || !rouletteWheelNumbers) return;
+
+  rouletteWheel.style.background = buildRouletteWheelGradient();
+  rouletteWheelNumbers.innerHTML = "";
+  const wheelSize = rouletteWheel.clientWidth || 320;
+  const center = wheelSize / 2;
+  const radius = wheelSize * 0.415;
+
+  rouletteSequence.forEach((number, index) => {
+    const angle = index * ROULETTE_POCKET_STEP + (ROULETTE_POCKET_STEP / 2);
+    const radians = ((angle - 90) * Math.PI) / 180;
+    const x = center + Math.cos(radians) * radius;
+    const y = center + Math.sin(radians) * radius;
+    const label = document.createElement("div");
+    const color = getRouletteColor(number);
+    label.className = `roulette-pocket-label ${color}`;
+    label.textContent = String(number);
+    label.style.left = `${x}px`;
+    label.style.top = `${y}px`;
+    label.style.transform = "translate(-50%, -50%)";
+    rouletteWheelNumbers.appendChild(label);
+  });
+}
+
+function createRouletteNumberButton(number) {
+  const color = getRouletteColor(number);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `roulette-bet-button roulette-${color}`;
+  button.dataset.rouletteType = "straight";
+  button.dataset.rouletteValue = String(number);
+  button.dataset.rouletteLabel = `Zahl ${number}`;
+  button.dataset.roulettePayout = "35";
+  button.textContent = String(number);
+  return button;
+}
+
+function getRouletteBetButtons() {
+  return [...document.querySelectorAll(".roulette-bet-button[data-roulette-type]")];
+}
+
+function describeRouletteSelection(selection = state.roulette.selection) {
+  if (!selection) return "Kein Feld gewählt.";
+  return `${selection.label} · Auszahlung ${selection.payout}:1`;
+}
+
+function setRouletteSelection(selection) {
+  state.roulette.selection = selection;
+  if (rouletteSelectionLabel) {
+    rouletteSelectionLabel.textContent = describeRouletteSelection(selection);
+  }
+
+  getRouletteBetButtons().forEach((button) => {
+    const isSelected =
+      button.dataset.rouletteType === selection?.type
+      && button.dataset.rouletteValue === String(selection?.value);
+    button.classList.toggle("selected", isSelected);
+  });
+}
+
+function handleRouletteBetButtonClick(button) {
+  if (!button || state.roulette.busy) return;
+  setRouletteSelection({
+    type: button.dataset.rouletteType,
+    value: button.dataset.rouletteValue,
+    label: button.dataset.rouletteLabel,
+    payout: Number(button.dataset.roulettePayout || 0),
+  });
+}
+
+function renderRouletteBoard() {
+  if (!rouletteNumbersGrid) return;
+
+  rouletteNumbersGrid.innerHTML = "";
+  for (let number = 1; number <= 36; number += 1) {
+    rouletteNumbersGrid.appendChild(createRouletteNumberButton(number));
+  }
+
+  getRouletteBetButtons().forEach((button) => {
+    button.addEventListener("click", () => {
+      handleRouletteBetButtonClick(button);
+    });
+  });
+
+  const defaultSelectionButton = document.querySelector('.roulette-bet-button[data-roulette-type="color"][data-roulette-value="red"]');
+  if (defaultSelectionButton) {
+    handleRouletteBetButtonClick(defaultSelectionButton);
+  }
+}
+
+function evaluateRouletteBet(selection, winningNumber, bet) {
+  if (!selection) {
+    return { won: false, profit: 0, payout: 0 };
+  }
+
+  let won = false;
+  const numericValue = Number(selection.value);
+
+  switch (selection.type) {
+    case "straight":
+      won = winningNumber === numericValue;
+      break;
+    case "color":
+      won = winningNumber !== 0 && getRouletteColor(winningNumber) === selection.value;
+      break;
+    case "parity":
+      won = winningNumber !== 0 && (selection.value === "even" ? winningNumber % 2 === 0 : winningNumber % 2 === 1);
+      break;
+    case "range":
+      won = winningNumber !== 0 && (selection.value === "low"
+        ? winningNumber >= 1 && winningNumber <= 18
+        : winningNumber >= 19 && winningNumber <= 36);
+      break;
+    case "dozen":
+      won = winningNumber !== 0 && (
+        (numericValue === 1 && winningNumber >= 1 && winningNumber <= 12)
+        || (numericValue === 2 && winningNumber >= 13 && winningNumber <= 24)
+        || (numericValue === 3 && winningNumber >= 25 && winningNumber <= 36)
+      );
+      break;
+    default:
+      won = false;
+  }
+
+  const profit = won ? Math.round(bet * Number(selection.payout || 0)) : 0;
+  return {
+    won,
+    profit,
+    payout: won ? profit + bet : 0,
   };
 }
 
@@ -2595,7 +2870,10 @@ document.querySelector("#flipCoin").addEventListener("click", async () => {
   coinVisual.classList.add("flipping");
   document.querySelector("#coinResult").textContent = "Die Münze ist in der Luft...";
 
-  const outcome = Math.random() < 0.5 ? "Kopf" : "Zahl";
+  const coinWinChance = 0.5 + getLuckProgress(currentUser) * 0.495;
+  const outcome = Math.random() < coinWinChance
+    ? state.currentChoice
+    : (state.currentChoice === "Kopf" ? "Zahl" : "Kopf");
   const outcomeShort = outcome === "Kopf" ? "K" : "Z";
   await wait(COIN_FLIP_DURATION / 2);
   coinVisual.classList.toggle("show-tails", outcome === "Zahl");
@@ -2686,7 +2964,11 @@ document.querySelector("#startRace").addEventListener("click", async () => {
 
     horseNames.forEach((horse) => {
       const finishAt = finishPositions[horse] ?? 390;
-      positions[horse] = Math.min(finishAt, positions[horse] + Math.floor(Math.random() * 22) + 12);
+      const baseStep = Math.floor(Math.random() * 22) + 12;
+      const luckStep = horse === selectedHorse
+        ? Math.round(getLuckProgress(currentUser) * 18) + randomInt(0, Math.round(getLuckProgress(currentUser) * 10))
+        : 0;
+      positions[horse] = Math.min(finishAt, positions[horse] + baseStep + luckStep);
       const runner = document.querySelector(`[data-horse="${horse}"]`);
       runner.style.transform = `translateX(${positions[horse]}px)`;
 
@@ -2760,7 +3042,7 @@ document.querySelector("#spinSlots").addEventListener("click", async () => {
   }
   setStatus("#slotsStatus", "Spinning");
   await unlockGameAudio();
-  const finalSymbols = generateSlotOutcome();
+  const finalSymbols = generateSlotOutcome(currentUser);
   const sequences = finalSymbols.map((symbol, index) => buildReelSequence(symbol, 20 + index * 6));
   const reelDurations = sequences.map((_, index) => 2200 + index * 850);
   playSlotSpinSound(reelDurations.map((duration) => duration / 1000));
@@ -2839,6 +3121,102 @@ document.querySelector("#spinSlots").addEventListener("click", async () => {
   setBetLocked(slotsBetInput, false);
 });
 
+document.querySelector("#spinRoulette").addEventListener("click", async () => {
+  const currentUser = requireUser("#rouletteStatus");
+  const bet = getBetValue("#rouletteBet");
+  const selection = state.roulette.selection;
+
+  if (!currentUser) return;
+  if (!selection) {
+    setStatus("#rouletteStatus", "Feld wählen");
+    rouletteResult.textContent = "Wähle zuerst ein Feld auf dem Tableau.";
+    return;
+  }
+  if (!canAfford(bet) || state.roulette.busy) {
+    setStatus("#rouletteStatus", "Ungültig");
+    return;
+  }
+
+  state.roulette.busy = true;
+  setBetLocked(rouletteBetInput, true);
+  hideGameResult();
+
+  const deducted = await adjustBalance(-bet, currentUser);
+  if (!deducted) {
+    state.roulette.busy = false;
+    setBetLocked(rouletteBetInput, false);
+    setStatus("#rouletteStatus", "Fehler");
+    return;
+  }
+
+  const winningNumber = generateRouletteWinningNumber(selection, currentUser);
+  const pocketAngle = getRoulettePocketAngle(winningNumber);
+  const wheelDuration = 5600;
+  const ballDuration = 6200;
+  const currentWheelAngle = normalizeAngle(state.roulette.wheelRotation);
+  const currentBallAngle = normalizeAngle(state.roulette.ballRotation);
+  const targetWheelAngle = normalizeAngle(360 - pocketAngle);
+  let wheelDelta = targetWheelAngle - currentWheelAngle;
+  if (wheelDelta < 0) {
+    wheelDelta += 360;
+  }
+  const animatedWheelRotation = state.roulette.wheelRotation + randomInt(5, 7) * 360 + wheelDelta;
+  const animatedBallRotation = state.roulette.ballRotation - currentBallAngle - randomInt(8, 10) * 360;
+
+  setStatus("#rouletteStatus", "Spinning");
+  rouletteResult.textContent = "Kessel und Kugel drehen...";
+
+  if (rouletteWheel && rouletteBallTrack) {
+    rouletteWheel.style.transition = `transform ${wheelDuration}ms cubic-bezier(0.08, 0.88, 0.18, 1)`;
+    rouletteBallTrack.style.transition = `transform ${ballDuration}ms cubic-bezier(0.08, 0.9, 0.16, 1)`;
+    window.requestAnimationFrame(() => {
+      setRouletteVisualState(animatedWheelRotation, animatedBallRotation);
+    });
+  }
+
+  await wait(ballDuration + 140);
+
+  state.roulette.wheelRotation = targetWheelAngle;
+  state.roulette.ballRotation = 0;
+  state.roulette.lastNumber = winningNumber;
+  setRouletteVisualState(targetWheelAngle, 0, true);
+
+  const color = getRouletteColor(winningNumber);
+  const colorLabel = color === "red" ? "Rot" : color === "black" ? "Schwarz" : "Grün";
+  const outcome = evaluateRouletteBet(selection, winningNumber, bet);
+
+  rouletteResult.innerHTML = `Die Kugel landet auf <strong>${winningNumber}</strong> (${colorLabel}).`;
+  rouletteLastNumber.innerHTML = buildRouletteLastNumberMarkup(winningNumber);
+
+  if (outcome.won) {
+    await adjustBalance(outcome.payout, currentUser);
+    setStatus("#rouletteStatus", "Gewonnen");
+    showGameResult({
+      game: "Roulette",
+      title: "Roulette gewonnen",
+      amount: outcome.profit,
+      detail: `${selection.label} trifft ${winningNumber}. Gewinn: ${outcome.profit} Coins. Gesamtauszahlung: ${outcome.payout} Coins. ${buildBalanceLine()}`,
+      variant: "win",
+    });
+    logActivity(`Roulette gewonnen auf ${selection.label}. Zahl war ${winningNumber}.`);
+    state.roulette.busy = false;
+    setBetLocked(rouletteBetInput, false);
+    return;
+  }
+
+  setStatus("#rouletteStatus", "Verloren");
+  showGameResult({
+    game: "Roulette",
+    title: "Roulette verloren",
+    amount: -bet,
+    detail: `${selection.label} verliert gegen ${winningNumber} (${colorLabel}). Dein Einsatz ist verloren. ${buildBalanceLine()}`,
+    variant: "loss",
+  });
+  logActivity(`Roulette verloren. Feld: ${selection.label}. Zahl war ${winningNumber}.`);
+  state.roulette.busy = false;
+  setBetLocked(rouletteBetInput, false);
+});
+
 document.querySelector("#loginUser").addEventListener("click", () => {
   const email = document.querySelector("#loginEmail").value.trim();
   const password = document.querySelector("#loginPassword").value.trim();
@@ -2880,6 +3258,7 @@ document.querySelector("#registerUser")?.addEventListener("click", () => {
     email,
     password,
     coins: 1000,
+    luckBoost: 1,
     friends: [],
     daily: {
       lastClaimDate: null,
@@ -2897,7 +3276,7 @@ document.querySelector("#registerUser")?.addEventListener("click", () => {
   logActivity(`${newUser.username} wurde neu registriert.`);
 });
 
-logoutUserButton.addEventListener("click", () => {
+logoutUserButton?.addEventListener("click", () => {
   const currentUser = getCurrentUser();
   if (currentUser) {
     logActivity(`${currentUser.username} hat sich ausgeloggt.`);
@@ -3015,6 +3394,17 @@ document.querySelector("#adminTakeSelf").addEventListener("click", () => {
   logActivity(`Admin hat ${currentUser.username} ${amount} Coins abgezogen.`);
 });
 
+document.querySelector("#adminSetLuckBoost").addEventListener("click", () => {
+  const currentUser = getCurrentUser();
+  if (!state.adminUnlocked || !currentUser) return;
+
+  const multiplier = clampLuckBoost(adminLuckBoostInput.value);
+  currentUser.luckBoost = multiplier;
+  adminStatus.textContent = `Luck Boost x${multiplier}`;
+  syncCurrentUser();
+  logActivity(`Admin hat ${currentUser.username} den Luck Boost auf x${multiplier} gesetzt.`);
+});
+
 document.querySelector("#adminGiveOther").addEventListener("click", () => {
   const playerId = adminTargetPlayerIdInput.value.trim();
   const amount = Number(adminTargetCoinsInput.value);
@@ -3045,6 +3435,23 @@ document.querySelector("#adminTakeOther").addEventListener("click", () => {
   targetUser.coins = Math.max(0, targetUser.coins - amount);
   syncCurrentUser();
   logActivity(`Admin hat ${targetUser.username} ${amount} Coins abgezogen.`);
+});
+
+document.querySelector("#adminSetOtherLuckBoost").addEventListener("click", () => {
+  const playerId = adminTargetPlayerIdInput.value.trim();
+  if (!state.adminUnlocked) return;
+
+  const targetUser = findUserByPlayerId(playerId);
+  if (!targetUser) {
+    adminStatus.textContent = "ID nicht gefunden";
+    return;
+  }
+
+  const multiplier = clampLuckBoost(adminTargetLuckBoostInput.value);
+  targetUser.luckBoost = multiplier;
+  adminStatus.textContent = `${targetUser.username} hat jetzt Luck Boost x${multiplier}`;
+  syncCurrentUser();
+  logActivity(`Admin hat ${targetUser.username} den Luck Boost auf x${multiplier} gesetzt.`);
 });
 
 document.querySelector("#claimDailyReward").addEventListener("click", () => {
@@ -3139,6 +3546,15 @@ menuSwitchButtons.forEach((button) => {
   });
 });
 
+renderRouletteWheel();
+renderRouletteBoard();
+setRouletteVisualState(0, 0, true);
+if (rouletteLastNumber) {
+  rouletteLastNumber.textContent = "Letzte Zahl: -";
+}
+window.addEventListener("resize", () => {
+  renderRouletteWheel();
+});
 slotReels.forEach((reel) => renderReel(reel, ["seven"]));
 renderAllCardsPreview();
 showMenuPanel("account");

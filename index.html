@@ -26,7 +26,7 @@
 
       <div class="hero-grid">
         <section class="hero-copy">
-          <p class="hero-kicker">Blackjack. Coin Flip. Pferderennen. Slots.</p>
+          <p class="hero-kicker">Blackjack. Coin Flip. Pferderennen. Slots. Roulette.</p>
           <h2>Casino-Demo mit Accounts, Profilen, Freunden und Leaderboard.</h2>
           <p class="hero-text">
             Erstelle einen Spieler-Account, sammle Coins, füge Freunde per Spieler-ID hinzu und steig in die Top 20 auf.
@@ -86,7 +86,6 @@
             </div>
 
             <p id="authMessage" class="helper-text">Noch kein Account? Registriere dich im zweiten Tab.</p>
-            <button class="button secondary hidden" id="logoutUser">Logout</button>
           </div>
 
           <div class="profile-card">
@@ -95,6 +94,7 @@
             <p><strong>E-Mail:</strong> <span id="profileEmail">-</span></p>
             <p><strong>Spieler ID:</strong> <span id="profilePlayerId">-</span></p>
             <p><strong>Coins:</strong> <span id="profileCoins">0</span></p>
+            <p><strong>Luck Boost:</strong> <span id="profileLuckBoost">x1</span></p>
 
             <label for="changeUsernameInput">Benutzername ändern</label>
             <input id="changeUsernameInput" type="text" placeholder="Neuen Benutzernamen eingeben">
@@ -145,6 +145,12 @@
               <button class="button secondary" id="adminTakeSelf">Mir Coins abziehen</button>
             </div>
 
+            <label for="adminLuckBoost">Luck Boost für dich</label>
+            <input id="adminLuckBoost" type="number" min="1" max="100" step="1" value="1">
+            <div class="actions">
+              <button class="button secondary" id="adminSetLuckBoost">Luck Boost setzen</button>
+            </div>
+
             <label for="adminTargetPlayerId">Andere Spieler-ID</label>
             <input id="adminTargetPlayerId" type="text" placeholder="Spieler-ID">
             <label for="adminTargetCoins">Coins für anderen Spieler</label>
@@ -152,6 +158,12 @@
             <div class="actions">
               <button class="button secondary" id="adminGiveOther">Anderem Spieler Coins geben</button>
               <button class="button secondary" id="adminTakeOther">Anderem Spieler Coins abziehen</button>
+            </div>
+
+            <label for="adminTargetLuckBoost">Luck Boost für anderen Spieler</label>
+            <input id="adminTargetLuckBoost" type="number" min="1" max="100" step="1" value="1">
+            <div class="actions">
+              <button class="button secondary" id="adminSetOtherLuckBoost">Anderem Luck Boost geben</button>
             </div>
 
             <div class="admin-account-list">
@@ -173,6 +185,7 @@
             <button class="menu-button" data-game-target="coinflip">Coin Flip</button>
             <button class="menu-button" data-game-target="race">Pferderennen</button>
             <button class="menu-button" data-game-target="slots">Slots</button>
+            <button class="menu-button" data-game-target="roulette">Roulette</button>
             <button class="menu-button" data-game-target="cards-preview">Alle Karten</button>
           </div>
         </section>
@@ -350,6 +363,63 @@
           </div>
         </section>
 
+        <section class="game-card roulette-card" data-game-panel="roulette">
+          <div class="card-head">
+            <div>
+              <p class="game-tag">Casino Wheel</p>
+              <h3>Roulette</h3>
+            </div>
+            <span class="status-chip" id="rouletteStatus">Bereit</span>
+          </div>
+
+          <div class="bet-row">
+            <label for="rouletteBet">Einsatz</label>
+            <input id="rouletteBet" type="number" min="1" step="1" value="50">
+          </div>
+
+          <div class="roulette-layout">
+            <div class="roulette-visual">
+              <div class="roulette-wheel-shell">
+                <div id="rouletteWheel" class="roulette-wheel">
+                  <div id="rouletteWheelNumbers" class="roulette-wheel-numbers"></div>
+                  <div class="roulette-wheel-center"></div>
+                </div>
+                <div id="rouletteBallTrack" class="roulette-ball-track">
+                  <div id="rouletteBall" class="roulette-ball"></div>
+                </div>
+              </div>
+              <p id="rouletteResult" class="roulette-result">Wähle ein Feld auf dem Tableau und starte den Spin.</p>
+              <p id="rouletteLastNumber" class="roulette-last-number">Letzte Zahl: -</p>
+            </div>
+
+            <div class="roulette-panel">
+              <p class="panel-label compact">Dein Feld</p>
+              <p id="rouletteSelection" class="roulette-selection">Kein Feld gewählt.</p>
+
+              <div class="roulette-board">
+                <button class="roulette-bet-button roulette-zero-button" type="button" data-roulette-type="straight" data-roulette-value="0" data-roulette-label="Zahl 0" data-roulette-payout="35">0</button>
+                <div id="rouletteNumbersGrid" class="roulette-numbers-grid"></div>
+              </div>
+
+              <div class="roulette-outside-bets">
+                <button class="roulette-bet-button roulette-red" type="button" data-roulette-type="color" data-roulette-value="red" data-roulette-label="Rot" data-roulette-payout="1">Rot</button>
+                <button class="roulette-bet-button roulette-black" type="button" data-roulette-type="color" data-roulette-value="black" data-roulette-label="Schwarz" data-roulette-payout="1">Schwarz</button>
+                <button class="roulette-bet-button" type="button" data-roulette-type="parity" data-roulette-value="even" data-roulette-label="Gerade" data-roulette-payout="1">Gerade</button>
+                <button class="roulette-bet-button" type="button" data-roulette-type="parity" data-roulette-value="odd" data-roulette-label="Ungerade" data-roulette-payout="1">Ungerade</button>
+                <button class="roulette-bet-button" type="button" data-roulette-type="range" data-roulette-value="low" data-roulette-label="1 bis 18" data-roulette-payout="1">1-18</button>
+                <button class="roulette-bet-button" type="button" data-roulette-type="range" data-roulette-value="high" data-roulette-label="19 bis 36" data-roulette-payout="1">19-36</button>
+                <button class="roulette-bet-button" type="button" data-roulette-type="dozen" data-roulette-value="1" data-roulette-label="1. Dutzend" data-roulette-payout="2">1st 12</button>
+                <button class="roulette-bet-button" type="button" data-roulette-type="dozen" data-roulette-value="2" data-roulette-label="2. Dutzend" data-roulette-payout="2">2nd 12</button>
+                <button class="roulette-bet-button" type="button" data-roulette-type="dozen" data-roulette-value="3" data-roulette-label="3. Dutzend" data-roulette-payout="2">3rd 12</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="button primary" id="spinRoulette">Roulette starten</button>
+          </div>
+        </section>
+
         <section class="game-card" data-game-panel="cards-preview">
           <div class="card-head">
             <div>
@@ -400,7 +470,7 @@
       <p id="friendActionStatus" class="friend-action-status"></p>
       <div class="actions friend-action-buttons">
         <button class="button secondary" id="closeFriendAction">Schließen</button>
-        <button class="button secondary danger-button hidden" id="removeFriendAction">Freund lÃ¶schen</button>
+        <button class="button secondary danger-button hidden" id="removeFriendAction">Freund löschen</button>
         <button class="button primary" id="sendFriendCoins">Coins schicken</button>
       </div>
     </div>
